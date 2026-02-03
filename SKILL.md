@@ -29,7 +29,7 @@ Intercom supports multiple usage patterns:
 
 ## Indexer Guidance
 - **Critical apps (finance/settlement):** prefer **multiple indexers** for redundancy and availability.
-- **Most app dev / single-peer setups:** **one indexer is enough**, typically the admin peer itself.
+- **App joiners / single-peer setups:** **one indexer is enough (sidechannel-only use) or even none as app joiner**, typically the admin peer itself or if just a read, none (connecting to other apps).
 
 ## Contracts
 - Contracts always come in **pairs**: `contract.js` (state/handlers) and `protocol.js` (command mapping + tx entrypoints).
