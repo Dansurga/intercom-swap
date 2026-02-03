@@ -155,7 +155,7 @@ Intercom must expose and describe all interactive commands so agents can operate
 - `/set_whitelist_status --user "<address>" --status 0|1` : Add/remove whitelist user.
 
 ### System Commands
-- `/tx --command "<string>" [--sim 1]` : Execute contract transaction (use --sim for dry‑run).
+- `/tx --command "<string>" [--sim 1]` : Execute contract transaction (use `--sim 1` for a dry‑run **before** any real broadcast).
 - `/deploy_subnet` : Register subnet in the settlement layer.
 - `/stats` : Show node status and keys.
 - `/get_keys` : Print public/private keys (sensitive).
