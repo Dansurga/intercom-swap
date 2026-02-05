@@ -56,6 +56,44 @@ const parseBool = (value, fallback) => {
   return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
 };
 
+const parseKeyValueList = (raw) => {
+  if (!raw) return [];
+  return String(raw)
+    .split(',')
+    .map((entry) => String(entry || '').trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => {
+      const idx = entry.indexOf(':');
+      const alt = entry.indexOf('=');
+      const splitAt = idx >= 0 ? idx : alt;
+      if (splitAt <= 0) return null;
+      const key = entry.slice(0, splitAt).trim();
+      const value = entry.slice(splitAt + 1).trim();
+      if (!key || !value) return null;
+      return [key, value];
+    })
+    .filter(Boolean);
+};
+
+const parseWelcomeValue = (raw) => {
+  if (!raw) return null;
+  let text = String(raw || '').trim();
+  if (!text) return null;
+  if (text.startsWith('b64:')) text = text.slice(4);
+  if (text.startsWith('{')) {
+    try {
+      return JSON.parse(text);
+    } catch (_e) {
+      return null;
+    }
+  }
+  try {
+    const decoded = b4a.toString(b4a.from(text, 'base64'));
+    return JSON.parse(decoded);
+  } catch (_e) {}
+  return null;
+};
+
 const sidechannelDebugRaw =
   (flags['sidechannel-debug'] && String(flags['sidechannel-debug'])) ||
   env.SIDECHANNEL_DEBUG ||
@@ -134,12 +172,43 @@ const sidechannelInviteTtlSec = Number.parseInt(sidechannelInviteTtlRaw, 10);
 const sidechannelInviteTtlMs = Number.isFinite(sidechannelInviteTtlSec)
   ? Math.max(sidechannelInviteTtlSec, 0) * 1000
   : 0;
+const sidechannelOwnerRaw =
+  (flags['sidechannel-owner'] && String(flags['sidechannel-owner'])) ||
+  env.SIDECHANNEL_OWNER ||
+  '';
+const sidechannelOwnerEntries = parseKeyValueList(sidechannelOwnerRaw);
+const sidechannelOwnerMap = new Map();
+for (const [channel, key] of sidechannelOwnerEntries) {
+  const normalizedKey = key.trim().toLowerCase();
+  if (channel && normalizedKey) sidechannelOwnerMap.set(channel.trim(), normalizedKey);
+}
+const sidechannelWelcomeRaw =
+  (flags['sidechannel-welcome'] && String(flags['sidechannel-welcome'])) ||
+  env.SIDECHANNEL_WELCOME ||
+  '';
+const sidechannelWelcomeEntries = parseKeyValueList(sidechannelWelcomeRaw);
+const sidechannelWelcomeMap = new Map();
+for (const [channel, value] of sidechannelWelcomeEntries) {
+  const welcome = parseWelcomeValue(value);
+  if (channel && welcome) sidechannelWelcomeMap.set(channel.trim(), welcome);
+}
+const sidechannelWelcomeRequiredRaw =
+  (flags['sidechannel-welcome-required'] && String(flags['sidechannel-welcome-required'])) ||
+  env.SIDECHANNEL_WELCOME_REQUIRED ||
+  '';
+const sidechannelWelcomeRequired = parseBool(sidechannelWelcomeRequiredRaw, true);
 
 const sidechannelEntry = '0000intercom';
 const sidechannelExtras = sidechannelsRaw
   .split(',')
   .map((value) => value.trim())
   .filter((value) => value.length > 0 && value !== sidechannelEntry);
+
+if (sidechannelWelcomeRequired && !sidechannelOwnerMap.has(sidechannelEntry)) {
+  console.warn(
+    `[sidechannel] welcome required but no owner key configured for entry channel "${sidechannelEntry}".`
+  );
+}
 
 const subnetBootstrapHex =
   (flags['subnet-bootstrap'] && String(flags['subnet-bootstrap'])) ||
@@ -338,6 +407,9 @@ const sidechannel = new Sidechannel(peer, {
   inviteRequiredChannels: sidechannelInviteChannels || undefined,
   inviterKeys: sidechannelInviterKeys,
   inviteTtlMs: sidechannelInviteTtlMs,
+  welcomeRequired: sidechannelWelcomeRequired,
+  ownerKeys: sidechannelOwnerMap.size > 0 ? sidechannelOwnerMap : undefined,
+  welcomeByChannel: sidechannelWelcomeMap.size > 0 ? sidechannelWelcomeMap : undefined,
   onMessage: scBridgeEnabled
     ? (channel, payload, connection) => scBridge.handleSidechannelMessage(channel, payload, connection)
     : null,

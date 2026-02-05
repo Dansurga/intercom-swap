@@ -26,6 +26,8 @@ const normalizeKeyHex = (value) => {
   return String(value).trim().toLowerCase();
 };
 
+const normalizeChannel = (value) => String(value || '').trim();
+
 const countLeadingZeroBits = (hex) => {
   let bits = 0;
   for (let i = 0; i < hex.length; i += 1) {
@@ -95,6 +97,38 @@ class Sidechannel extends Feature {
     this.inviterKeys = inviterKeys.length > 0 ? new Set(inviterKeys) : null;
     this.inviteTtlMs = Number.isSafeInteger(config.inviteTtlMs) ? config.inviteTtlMs : 0;
     this.invitedPeers = new Map();
+    this.welcomeRequired = config.welcomeRequired !== false;
+    this.ownerKeys = new Map();
+    const ownerEntries = config.ownerKeys instanceof Map
+      ? Array.from(config.ownerKeys.entries())
+      : Array.isArray(config.ownerKeys)
+        ? config.ownerKeys
+        : config.ownerKeys && typeof config.ownerKeys === 'object'
+          ? Object.entries(config.ownerKeys)
+          : [];
+    for (const entry of ownerEntries) {
+      const [channel, key] = Array.isArray(entry) ? entry : [];
+      const normalizedChannel = normalizeChannel(channel);
+      const normalizedKey = normalizeKeyHex(key);
+      if (normalizedChannel && normalizedKey) this.ownerKeys.set(normalizedChannel, normalizedKey);
+    }
+    this.defaultOwnerKey = normalizeKeyHex(config.defaultOwnerKey);
+    this.welcomeByChannel = new Map();
+    const welcomeEntries = config.welcomeByChannel instanceof Map
+      ? Array.from(config.welcomeByChannel.entries())
+      : Array.isArray(config.welcomeByChannel)
+        ? config.welcomeByChannel
+        : config.welcomeByChannel && typeof config.welcomeByChannel === 'object'
+          ? Object.entries(config.welcomeByChannel)
+          : [];
+    for (const entry of welcomeEntries) {
+      const [channel, welcome] = Array.isArray(entry) ? entry : [];
+      const normalizedChannel = normalizeChannel(channel);
+      if (normalizedChannel && welcome) {
+        this.welcomeByChannel.set(normalizedChannel, welcome);
+      }
+    }
+    this.welcomedChannels = new Set();
 
     const initial = Array.isArray(config.channels) ? config.channels : [];
     for (const name of initial) this._registerChannel(name);
@@ -201,7 +235,7 @@ class Sidechannel extends Feature {
     return payload;
   }
 
-  requestOpen(newChannel, viaChannel = null, invite = null) {
+  requestOpen(newChannel, viaChannel = null, invite = null, welcome = null) {
     const target = String(newChannel || '').trim();
     if (!target) return false;
     const via = String(viaChannel || this.entryChannel || '').trim();
@@ -209,7 +243,8 @@ class Sidechannel extends Feature {
     return this.broadcast(via, {
       control: 'open_channel',
       channel: target,
-      invite: invite || undefined
+      invite: invite || undefined,
+      welcome: welcome || undefined,
     });
   }
 
@@ -320,6 +355,82 @@ class Sidechannel extends Feature {
     return false;
   }
 
+  _normalizeWelcomePayload(payload) {
+    return {
+      channel: normalizeChannel(payload?.channel),
+      ownerPubKey: normalizeKeyHex(payload?.ownerPubKey) || '',
+      text: String(payload?.text ?? ''),
+      issuedAt: Number(payload?.issuedAt),
+      version: Number.isFinite(payload?.version) ? Number(payload.version) : 1,
+    };
+  }
+
+  _getOwnerKey(channel) {
+    const normalized = normalizeChannel(channel);
+    if (this.ownerKeys.has(normalized)) return this.ownerKeys.get(normalized);
+    return this.defaultOwnerKey;
+  }
+
+  _welcomeRequired(channel) {
+    if (!this.welcomeRequired) return false;
+    return true;
+  }
+
+  _isWelcomed(channel) {
+    return this.welcomedChannels.has(normalizeChannel(channel));
+  }
+
+  _rememberWelcome(channel) {
+    this.welcomedChannels.add(normalizeChannel(channel));
+  }
+
+  _verifyWelcome(welcome, channel, connection) {
+    if (!welcome || typeof welcome !== 'object') return false;
+    const payload = welcome.payload && typeof welcome.payload === 'object' ? welcome.payload : welcome;
+    const sigHex = welcome.sig || welcome.signature;
+    if (typeof sigHex !== 'string' || sigHex.length === 0) return false;
+    const normalized = this._normalizeWelcomePayload(payload);
+    if (normalized.channel !== normalizeChannel(channel)) return false;
+    const ownerKey = this._getOwnerKey(channel);
+    if (!ownerKey || normalized.ownerPubKey !== ownerKey) return false;
+    if (!Number.isFinite(normalized.issuedAt)) return false;
+    const message = stableStringify(normalized);
+    let sigBuf = null;
+    let pubBuf = null;
+    try {
+      sigBuf = b4a.from(sigHex, 'hex');
+      pubBuf = b4a.from(ownerKey, 'hex');
+    } catch (_e) {
+      return false;
+    }
+    if (!PeerWallet.verify(sigBuf, b4a.from(message), pubBuf)) return false;
+    this._rememberWelcome(channel);
+    return true;
+  }
+
+  _isWelcomeMessage(payload) {
+    return payload?.message?.control === 'welcome';
+  }
+
+  _extractWelcome(payload) {
+    if (!payload || typeof payload !== 'object') return null;
+    return (
+      payload?.message?.welcome ||
+      payload?.welcome ||
+      payload?.invite?.welcome ||
+      payload?.message?.invite?.welcome ||
+      null
+    );
+  }
+
+  _getConfiguredWelcome(channel) {
+    return this.welcomeByChannel.get(normalizeChannel(channel)) || null;
+  }
+
+  getWelcome(channel) {
+    return this._getConfiguredWelcome(channel);
+  }
+
   _powBase(payload, nonce) {
     return stableStringify({
       id: payload?.id ?? null,
@@ -368,6 +479,18 @@ class Sidechannel extends Feature {
     };
     this.channels.set(channel, entry);
     return entry;
+  }
+
+  _sendWelcome(record, entry) {
+    const welcome = this._getConfiguredWelcome(entry.name);
+    if (!welcome) return;
+    const ownerKey = this._getOwnerKey(entry.name);
+    const selfKey = normalizeKeyHex(this.peer?.wallet?.publicKey);
+    if (!ownerKey || !selfKey || ownerKey !== selfKey) return;
+    if (!record?.message) return;
+    const payload = this._buildPayload(entry.name, { control: 'welcome', welcome });
+    this._rememberSeen(payload.id, this._now());
+    record.message.send(payload);
   }
 
   _openChannelForConnection(connection, entry) {
@@ -463,9 +586,46 @@ class Sidechannel extends Feature {
         }
         const control = payload?.message?.control;
         const requestedChannel = payload?.message?.channel;
+        const isWelcome = this._isWelcomeMessage(payload);
+        const embeddedWelcome = this._extractWelcome(payload);
+        let welcomeOk = false;
+        if (embeddedWelcome) {
+          welcomeOk = this._verifyWelcome(embeddedWelcome, entry.name, connection);
+          if (!welcomeOk && isWelcome) {
+            if (this.debug) {
+              console.log(`[sidechannel:${entry.name}] drop (invalid welcome) from ${this._getRemoteKey(connection)}`);
+            }
+            return;
+          }
+        } else if (isWelcome) {
+          if (this.debug) {
+            console.log(`[sidechannel:${entry.name}] drop (missing welcome) from ${this._getRemoteKey(connection)}`);
+          }
+          return;
+        }
+        if (this._welcomeRequired(entry.name) && !this._isWelcomed(entry.name) && !welcomeOk) {
+          if (this.debug) {
+            console.log(`[sidechannel:${entry.name}] drop (awaiting welcome) from ${this._getRemoteKey(connection)}`);
+          }
+          return;
+        }
         if (control === 'open_channel' && this.allowRemoteOpen && typeof requestedChannel === 'string') {
           const target = requestedChannel.trim();
           if (target.length > 0) {
+            const welcome = payload?.message?.welcome || payload?.message?.invite?.welcome;
+            if (welcome) {
+              if (!this._verifyWelcome(welcome, target, connection)) {
+                if (this.debug) {
+                  console.log(`[sidechannel] open denied (welcome) for ${target} from ${this._getRemoteKey(connection)}`);
+                }
+                return;
+              }
+            } else if (this._welcomeRequired(target)) {
+              if (this.debug) {
+                console.log(`[sidechannel] open denied (missing welcome) for ${target} from ${this._getRemoteKey(connection)}`);
+              }
+              return;
+            }
             if (this._inviteRequired(target)) {
               const invite = payload?.message?.invite;
               if (!invite || !this._verifyInvite(invite, target, connection)) {
@@ -482,12 +642,14 @@ class Sidechannel extends Feature {
               console.log(`[sidechannel] channel request received: ${target}`);
             }
           }
-        } else if (this.onMessage) {
-          this.onMessage(entry.name, payload, connection);
         } else {
-          const from = payload?.from ?? 'unknown';
-          const msg = payload?.message ?? payload;
-          console.log(`[sidechannel:${entry.name}] ${from}:`, msg);
+          if (this.onMessage) {
+            this.onMessage(entry.name, payload, connection);
+          } else {
+            const from = payload?.from ?? 'unknown';
+            const msg = payload?.message ?? payload;
+            console.log(`[sidechannel:${entry.name}] ${from}:`, msg);
+          }
         }
         this._relay(entry.name, payload, connection);
       }
@@ -501,6 +663,9 @@ class Sidechannel extends Feature {
           console.log(
             `[sidechannel:${entry.name}] channel open=${opened} for ${this._getRemoteKey(connection)}`
           );
+        }
+        if (opened) {
+          this._sendWelcome(record, entry);
         }
         if (!opened) {
           const retryCount = (record?.retries ?? 0) + 1;
