@@ -221,7 +221,7 @@ const sidechannelExtras = sidechannelsRaw
 
 if (sidechannelWelcomeRequired && !sidechannelOwnerMap.has(sidechannelEntry)) {
   console.warn(
-    `[sidechannel] welcome required but no owner key configured for entry channel "${sidechannelEntry}".`
+    `[sidechannel] welcome required for non-entry channels; entry "${sidechannelEntry}" is open and does not require owner/welcome.`
   );
 }
 

@@ -253,9 +253,8 @@ class ScBridge extends Feature {
         if (invitePayload && welcome && !invitePayload.welcome) {
           invitePayload = { ...invitePayload, welcome };
         }
-        if (!invitePayload && welcome) {
-          this._sendError(client, 'Welcome requires invite for send; use open or include invite.');
-          return;
+        if (welcome && !invitePayload) {
+          this.sidechannel.acceptInvite(channel, null, welcome);
         }
         const ok = this.sidechannel.broadcast(
           channel,

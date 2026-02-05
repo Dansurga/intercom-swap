@@ -227,12 +227,13 @@ Sidechannels:
 - `--sidechannel-invite-ttl <sec>` : default TTL for invites created via `/sc_invite` (default: 604800 = 7 days).
   - **Invite identity:** invites are signed/verified against the **peer P2P pubkey (hex)**. The invite payload may also include the inviter’s **trac address** for payment/settlement, but validation uses the peer key.
 - **Invite-only join:** peers must hold a valid invite (or be an approved inviter) before they can join protected channels; uninvited joins are rejected.
-- `--sidechannel-welcome-required 0|1` : require a **signed welcome** for all sidechannels (**default: on**).
+- `--sidechannel-welcome-required 0|1` : require a **signed welcome** for all sidechannels (**default: on**, **except `0000intercom` which is always open**).
 - `--sidechannel-owner "<chan:pubkey,chan2:pubkey>"` : channel **owner** peer pubkey (hex). This key signs the welcome and is the source of truth.
 - `--sidechannel-owner-write-only 0|1` : **owner‑only send** for all sidechannels (non‑owners can join/read, their sends are rejected).
 - `--sidechannel-owner-write-channels "chan1,chan2"` : owner‑only send for these channels only.
-- `--sidechannel-welcome "<chan:welcome_b64,chan2:welcome_b64>"` : **pre‑signed welcome** per channel (from `/sc_welcome`). Recommended for `0000intercom`.
-  - **Welcome required:** messages are dropped until a valid owner‑signed welcome is verified (invited or not).
+- `--sidechannel-welcome "<chan:welcome_b64,chan2:welcome_b64>"` : **pre‑signed welcome** per channel (from `/sc_welcome`). Optional for `0000intercom`, required for non‑entry channels if welcome enforcement is on.
+- **Welcome required:** messages are dropped until a valid owner‑signed welcome is verified (invited or not).  
+  **Exception:** `0000intercom` is **name‑only** and does **not** require owner or welcome.
 
 SC-Bridge (WebSocket):
 - `--sc-bridge 1` : enable WebSocket bridge for sidechannels.
@@ -289,15 +290,15 @@ Intercom must expose and describe all interactive commands so agents can operate
 - `/msb` : Show settlement‑layer status (balances, fee, connectivity).
 
 ### Sidechannel Commands (P2P Messaging)
-- `/sc_join --channel "<name>"` : Join or create a sidechannel.
+- `/sc_join --channel "<name>" [--invite <json|b64|@file>] [--welcome <json|b64|@file>]` : Join or create a sidechannel.
 - `/sc_open --channel "<name>" [--via "<channel>"] [--invite <json|b64|@file>] [--welcome <json|b64|@file>]` : Request channel creation via the entry channel.
-- `/sc_send --channel "<name>" --message "<text>" [--invite <json|b64|@file>]` : Send a sidechannel message.
+- `/sc_send --channel "<name>" --message "<text>" [--invite <json|b64|@file>] [--welcome <json|b64|@file>]` : Send a sidechannel message.
 - `/sc_invite --channel "<name>" --pubkey "<peer-pubkey-hex>" [--ttl <sec>] [--welcome <json|b64|@file>]` : Create a signed invite (prints JSON + base64; includes welcome if provided).
 - `/sc_welcome --channel "<name>" --text "<message>"` : Create a signed welcome (prints JSON + base64).
 - `/sc_stats` : Show sidechannel channel list and connection count.
 
 ## Sidechannels: Behavior and Reliability
-- **Entry channel** is always `0000intercom`.
+- **Entry channel** is always `0000intercom` and is **name‑only** (owner/welcome do not create separate channels).
 - **Relay** is enabled by default with TTL=3 and dedupe; this allows multi‑hop propagation when peers are not fully meshed.
 - **Rate limiting** is enabled by default (64 KB/s, 256 KB burst, 3 strikes → 30s block).
 - **Message size guard** defaults to 1,000,000 bytes (JSON‑encoded payload).
@@ -305,23 +306,22 @@ Intercom must expose and describe all interactive commands so agents can operate
 - **Dynamic channel requests**: `/sc_open` posts a request in the entry channel; you can auto‑join with `--sidechannel-auto-join 1`.
 - **Invites**: uses the **peer pubkey** (transport identity). Invites may also include the inviter’s **trac address** for payments, but verification is by peer pubkey.
 - **Invite delivery**: the invite is a signed JSON/base64 blob. You can deliver it via `0000intercom` **or** out‑of‑band (email, website, QR, etc.).
-- **Welcome**: required for **all** sidechannels (public + invite‑only). Configure `--sidechannel-owner` on **every peer** that should accept a channel, and distribute the owner‑signed welcome via `--sidechannel-welcome` (or include it in `/sc_open` / `/sc_invite`).
+- **Welcome**: required for **all** sidechannels (public + invite‑only) **except** `0000intercom`.  
+  Configure `--sidechannel-owner` on **every peer** that should accept a channel, and distribute the owner‑signed welcome via `--sidechannel-welcome` (or include it in `/sc_open` / `/sc_invite`).
 - **Owner‑only send (optional)**: use `--sidechannel-owner-write-only 1` or `--sidechannel-owner-write-channels "priv1"` so only the owner pubkey can write; others can join and listen.
 
-### Signed Welcome (Required)
+### Signed Welcome (Non‑Entry Channels)
 1) On the **owner** peer, create the welcome:
-   - `/sc_welcome --channel "0000intercom" --text "Welcome to Intercom..."`  
+   - `/sc_welcome --channel "pub1" --text "Welcome to pub1..."`  
    (prints JSON + `welcome_b64`)
 2) Share the **owner key** and **welcome** with all peers that should accept the channel:
-   - `--sidechannel-owner "0000intercom:<owner-pubkey-hex>"`
-   - `--sidechannel-welcome "0000intercom:<welcome_b64>"`
-3) For **public** custom channels, do the same:
    - `--sidechannel-owner "pub1:<owner-pubkey-hex>"`
    - `--sidechannel-welcome "pub1:<welcome_b64>"`
-4) For **invite‑only** channels, include the welcome in the invite or open request:
+3) For **invite‑only** channels, include the welcome in the invite or open request:
    - `/sc_invite --channel "priv1" --pubkey "<peer>" --welcome <json|b64|@file>`
    - `/sc_open --channel "priv1" --invite <json|b64|@file> --welcome <json|b64|@file>`
-5) **Entry channel (`0000intercom`) is fixed**: sign it once with the designated owner key and reuse the same `welcome_b64` across peers.
+4) **Entry channel (`0000intercom`) is fixed** and **open to all**: owner/welcome are optional.  
+   If you want a canonical welcome, sign it once with the designated owner key and reuse the same `welcome_b64` across peers.
 
 ## SC‑Bridge (WebSocket) Protocol
 SC‑Bridge exposes sidechannel messages over WebSocket and accepts inbound commands.

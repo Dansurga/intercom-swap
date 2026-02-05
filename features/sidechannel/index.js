@@ -155,6 +155,12 @@ class Sidechannel extends Feature {
     return Date.now();
   }
 
+  _isEntry(channel) {
+    const normalized = normalizeChannel(channel);
+    const entry = this.entryChannel ? normalizeChannel(this.entryChannel) : '';
+    return normalized.length > 0 && entry.length > 0 && normalized === entry;
+  }
+
   _getRemoteKey(connection) {
     return normalizeKeyHex(connection?.remotePublicKey) || 'unknown';
   }
@@ -295,12 +301,14 @@ class Sidechannel extends Feature {
   }
 
   _inviteRequired(channel) {
+    if (this._isEntry(channel)) return false;
     if (!this.inviteRequired) return false;
     if (this.inviteRequiredChannels) return this.inviteRequiredChannels.has(channel);
     return true;
   }
 
   _ownerWriteOnly(channel) {
+    if (this._isEntry(channel)) return false;
     if (this.ownerWriteOnly) return true;
     if (this.ownerWriteChannels) return this.ownerWriteChannels.has(normalizeChannel(channel));
     return false;
@@ -440,6 +448,7 @@ class Sidechannel extends Feature {
   }
 
   _welcomeRequired(channel) {
+    if (this._isEntry(channel)) return false;
     if (!this.welcomeRequired) return false;
     return true;
   }

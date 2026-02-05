@@ -276,25 +276,10 @@ class SampleProtocol extends Protocol{
         if (this.input.startsWith("/sc_join")) {
             const args = this.parseArgs(input);
             const name = args.channel || args.ch || args.name;
-            if (!name) {
-                console.log('Usage: /sc_join --channel "<name>"');
-                return;
-            }
-            if (!this.peer.sidechannel) {
-                console.log('Sidechannel not initialized.');
-                return;
-            }
-            await this.peer.sidechannel.addChannel(String(name));
-            console.log('Joined sidechannel:', name);
-            return;
-        }
-        if (this.input.startsWith("/sc_send")) {
-            const args = this.parseArgs(input);
-            const name = args.channel || args.ch || args.name;
-            const message = args.message || args.msg;
             const inviteArg = args.invite || args.invite_b64 || args.invitebase64;
-            if (!name || message === undefined) {
-                console.log('Usage: /sc_send --channel "<name>" --message "<text>" [--invite <json|b64|@file>]');
+            const welcomeArg = args.welcome || args.welcome_b64 || args.welcomebase64;
+            if (!name) {
+                console.log('Usage: /sc_join --channel "<name>" [--invite <json|b64|@file>] [--welcome <json|b64|@file>]');
                 return;
             }
             if (!this.peer.sidechannel) {
@@ -309,8 +294,67 @@ class SampleProtocol extends Protocol{
                     return;
                 }
             }
-            await this.peer.sidechannel.addChannel(String(name));
-            this.peer.sidechannel.broadcast(String(name), message, invite ? { invite } : undefined);
+            let welcome = null;
+            if (welcomeArg) {
+                welcome = parseWelcomeArg(welcomeArg);
+                if (!welcome) {
+                    console.log('Invalid welcome. Pass JSON, base64, or @file.');
+                    return;
+                }
+            }
+            if (invite || welcome) {
+                this.peer.sidechannel.acceptInvite(String(name), invite, welcome);
+            }
+            const ok = await this.peer.sidechannel.addChannel(String(name));
+            if (!ok) {
+                console.log('Join denied (invite required or invalid).');
+                return;
+            }
+            console.log('Joined sidechannel:', name);
+            return;
+        }
+        if (this.input.startsWith("/sc_send")) {
+            const args = this.parseArgs(input);
+            const name = args.channel || args.ch || args.name;
+            const message = args.message || args.msg;
+            const inviteArg = args.invite || args.invite_b64 || args.invitebase64;
+            const welcomeArg = args.welcome || args.welcome_b64 || args.welcomebase64;
+            if (!name || message === undefined) {
+                console.log('Usage: /sc_send --channel "<name>" --message "<text>" [--invite <json|b64|@file>] [--welcome <json|b64|@file>]');
+                return;
+            }
+            if (!this.peer.sidechannel) {
+                console.log('Sidechannel not initialized.');
+                return;
+            }
+            let invite = null;
+            if (inviteArg) {
+                invite = parseInviteArg(inviteArg);
+                if (!invite) {
+                    console.log('Invalid invite. Pass JSON, base64, or @file.');
+                    return;
+                }
+            }
+            let welcome = null;
+            if (welcomeArg) {
+                welcome = parseWelcomeArg(welcomeArg);
+                if (!welcome) {
+                    console.log('Invalid welcome. Pass JSON, base64, or @file.');
+                    return;
+                }
+            }
+            if (invite || welcome) {
+                this.peer.sidechannel.acceptInvite(String(name), invite, welcome);
+            }
+            const ok = await this.peer.sidechannel.addChannel(String(name));
+            if (!ok) {
+                console.log('Send denied (invite required or invalid).');
+                return;
+            }
+            const sent = this.peer.sidechannel.broadcast(String(name), message, invite ? { invite } : undefined);
+            if (!sent) {
+                console.log('Send denied (owner-only or invite required).');
+            }
             return;
         }
         if (this.input.startsWith("/sc_open")) {
