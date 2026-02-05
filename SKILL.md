@@ -235,6 +235,12 @@ Sidechannels:
 - **Welcome required:** messages are dropped until a valid owner‑signed welcome is verified (invited or not).  
   **Exception:** `0000intercom` is **name‑only** and does **not** require owner or welcome.
 
+### Sidechannel Policy Summary
+- **`0000intercom` (entry):** name‑only, open to all, **no owner / welcome / invite** checks.
+- **Public channels:** require **owner‑signed welcome** by default (unless you disable welcome enforcement).
+- **Owner‑only channels:** same as public, plus **only the owner pubkey can send**.
+- **Invite‑only channels:** **invite required + welcome required**.
+
 SC-Bridge (WebSocket):
 - `--sc-bridge 1` : enable WebSocket bridge for sidechannels.
 - `--sc-bridge-host <host>` : bind host (default `127.0.0.1`).
@@ -250,6 +256,86 @@ Agents can request new channels dynamically in the entry channel. This enables c
 - Use `/sc_open --channel "<name>" [--via "<channel>"] [--invite <json|b64|@file>] [--welcome <json|b64|@file>]` to request a new channel.
 - The request **must** include an owner‑signed welcome for the target channel (via `--welcome` or embedded in the invite).
 - Peers can accept manually with `/sc_join --channel "<name>"`, or auto‑join if configured.
+
+## Typical Requests and How to Respond
+When a human asks for something, translate it into the minimal set of flags/commands and ask for any missing details.
+
+**Create my channel, only I can post.**  
+Ask for: channel name, owner pubkey (if not this peer).  
+Answer: use `--sidechannel-owner` + `--sidechannel-owner-write-channels` and generate a welcome.  
+Commands:
+1) `/sc_welcome --channel "<name>" --text "<welcome>"`  
+2) Start peers with:  
+   `--sidechannels <name>`  
+   `--sidechannel-owner "<name>:<owner-pubkey-hex>"`  
+   `--sidechannel-welcome "<name>:<welcome_b64>"`
+
+**Create my channel, only invited can join.**  
+Ask for: channel name, inviter pubkey(s), invitee pubkey(s), invite TTL, welcome text.  
+Answer: enable invite-required for the channel and issue per‑invitee invites.  
+Commands:
+1) `/sc_welcome --channel "<name>" --text "<welcome>"`  
+2) Start owner with:  
+   `--sidechannels <name>`  
+   `--sidechannel-owner "<name>:<owner-pubkey-hex>"`  
+   `--sidechannel-welcome "<name>:<welcome_b64>"`  
+   `--sidechannel-invite-required 1`  
+   `--sidechannel-invite-channels "<name>"`  
+   `--sidechannel-inviter-keys "<owner-pubkey-hex>"`  
+3) Invite each peer:  
+   `/sc_invite --channel "<name>" --pubkey "<peer-pubkey-hex>" --ttl <sec>`  
+4) Joiner uses:  
+   `/sc_join --channel "<name>" --invite <json|b64|@file>`
+
+**Create a public channel (anyone can join).**  
+Ask for: channel name, owner pubkey, welcome text.  
+Answer: same as owner channel but without invite requirements and without owner-only send (unless requested).  
+Commands:
+1) `/sc_welcome --channel "<name>" --text "<welcome>"`  
+2) Start peers with:  
+   `--sidechannels <name>`  
+   `--sidechannel-owner "<name>:<owner-pubkey-hex>"`  
+   `--sidechannel-welcome "<name>:<welcome_b64>"`
+
+**Let people open channels dynamically.**  
+Ask for: whether auto‑join should be enabled.  
+Answer: allow `/sc_open` and optionally auto‑join.  
+Flags: `--sidechannel-allow-remote-open 1` and optionally `--sidechannel-auto-join 1`.
+
+**Send a message on a protected channel.**  
+Ask for: channel name, whether invite/welcome is available.  
+Answer: send with invite if required, ensure welcome is configured.  
+Command: `/sc_send --channel "<name>" --message "<text>" [--invite <json|b64|@file>]`
+
+**Join a channel as a human (interactive TTY).**  
+Ask for: channel name, invite (if required), welcome (if required).  
+Answer: use `/sc_join` with `--invite`/`--welcome` as needed.  
+Example: `/sc_join --channel "<name>" --invite <json|b64|@file>`
+Note: **`/sc_join` itself does not require subnet bootstrap**. The bootstrap is only needed when **starting the peer** (to join the subnet). Once the peer is running, you can join channels via `/sc_join` without knowing the bootstrap.
+
+**Join or send via WebSocket (devs / vibe coders).**  
+Ask for: channel name, invite/welcome (if required), and SC‑Bridge auth token.  
+Answer: use SC‑Bridge JSON commands.  
+Examples:  
+`{ "type":"join", "channel":"<name>", "invite":"<invite_b64>", "welcome":"<welcome_b64>" }`  
+`{ "type":"send", "channel":"<name>", "message":"...", "invite":"<invite_b64>" }`
+Note: **WebSocket `join`/`send` does not require subnet bootstrap**. The bootstrap is only required at **peer startup** (to join the subnet).
+
+**Create a contract.**  
+Ask for: contract purpose, whether chat/tx should be enabled.  
+Answer: implement `contract/contract.js` + `contract/protocol.js`, ensure all peers run the same version, restart all peers.
+
+**Join an existing subnet.**  
+Ask for: subnet channel and subnet bootstrap (writer key, obtainable by channel owner).  
+Answer: start with `--subnet-channel <name>` and `--subnet-bootstrap <writer-key-hex>`.
+
+**Enable SC‑Bridge for an agent.**  
+Ask for: port, token, optional filters.  
+Answer: start with `--sc-bridge 1 --sc-bridge-token <token> [--sc-bridge-port <port>]`.
+
+**Why am I not receiving sidechannel messages?**  
+Ask for: channel name, owner key, welcome configured, invite status, and whether PoW is enabled.  
+Answer: verify `--sidechannel-owner` + `--sidechannel-welcome` are set on both peers; confirm invite required; turn on `--sidechannel-debug 1`.
 
 ## Interactive UI Options (CLI Commands)
 Intercom must expose and describe all interactive commands so agents can operate the network reliably.
@@ -308,6 +394,8 @@ Intercom must expose and describe all interactive commands so agents can operate
 - **Invite delivery**: the invite is a signed JSON/base64 blob. You can deliver it via `0000intercom` **or** out‑of‑band (email, website, QR, etc.).
 - **Welcome**: required for **all** sidechannels (public + invite‑only) **except** `0000intercom`.  
   Configure `--sidechannel-owner` on **every peer** that should accept a channel, and distribute the owner‑signed welcome via `--sidechannel-welcome` (or include it in `/sc_open` / `/sc_invite`).
+- **Important:** `/sc_join` without `--sidechannel-owner` (or a configured welcome) **accepts any sender on that name**.  
+  If two owners use the same name, you will see a mixed stream or drops. **Always set the owner for non‑entry channels.**
 - **Owner‑only send (optional)**: use `--sidechannel-owner-write-only 1` or `--sidechannel-owner-write-channels "priv1"` so only the owner pubkey can write; others can join and listen.
 
 ### Signed Welcome (Non‑Entry Channels)
