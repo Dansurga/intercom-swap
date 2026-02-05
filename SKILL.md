@@ -161,7 +161,7 @@ Questions to ask first:
 - Updating **npm deps**, **Pear runtime**, or **both**?
 - Any peers running that must be stopped?
 
-Commands (run in the `contract-test-latest` app folder):
+Commands (run in the folder that contains this SKILL.md and its `package.json`):
 ```bash
 # ensure Node 22
 node -v
