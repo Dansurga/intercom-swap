@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import b4a from 'b4a';
 import PeerWallet from 'trac-wallet';
+import DHT from 'hyperdht';
 
 import { Connection, Keypair } from '@solana/web3.js';
 import {
@@ -298,6 +299,17 @@ test('e2e: sidechannel swap protocol + LN regtest + Solana escrow', async (t) =>
   const otcChannel = `btc-usdt-sol-otc-${runId}`;
   const swapChannel = `swap:${runId}`;
 
+  // Avoid relying on external DHT bootstrap nodes for e2e reliability.
+  // Peers are configured to use this local bootstrapper via --dht-bootstrap.
+  const dhtPort = 30000 + crypto.randomInt(0, 10000);
+  const dht = DHT.bootstrapper(dhtPort, '127.0.0.1');
+  const dhtBootstrap = `127.0.0.1:${dhtPort}`;
+  t.after(async () => {
+    try {
+      await dht.destroy({ force: true });
+    } catch (_e) {}
+  });
+
   // Build the Solana program once.
   await sh('cargo', ['build-sbf'], { cwd: path.join(repoRoot, 'solana/ln_usdt_escrow') });
   const soPath = path.join(repoRoot, 'solana/ln_usdt_escrow/target/deploy/ln_usdt_escrow.so');
@@ -415,6 +427,8 @@ test('e2e: sidechannel swap protocol + LN regtest + Solana escrow', async (t) =>
       `${aliceStore}-msb`,
       '--subnet-channel',
       `e2e-subnet-${runId}-a`,
+      '--dht-bootstrap',
+      dhtBootstrap,
       '--msb',
       '0',
       '--sc-bridge',
@@ -451,6 +465,8 @@ test('e2e: sidechannel swap protocol + LN regtest + Solana escrow', async (t) =>
       `${bobStore}-msb`,
       '--subnet-channel',
       `e2e-subnet-${runId}-b`,
+      '--dht-bootstrap',
+      dhtBootstrap,
       '--msb',
       '0',
       '--sc-bridge',
@@ -488,6 +504,8 @@ test('e2e: sidechannel swap protocol + LN regtest + Solana escrow', async (t) =>
       `${eveStore}-msb`,
       '--subnet-channel',
       `e2e-subnet-${runId}-e`,
+      '--dht-bootstrap',
+      dhtBootstrap,
       '--msb',
       '0',
       '--sc-bridge',

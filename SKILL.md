@@ -67,8 +67,13 @@ This repo includes `scripts/swapctl.mjs` (with wrappers `scripts/swapctl.sh` and
 - open/join/send sidechannels over SC-Bridge
 - create owner-signed welcomes + invites (via SC-Bridge signing)
 - send signed swap messages (`rfq`, `quote`, `terms`, `accept`) with schema validation
+- inspect a running peer via SC-Bridge (`info`, `stats`) and watch sidechannel traffic (`watch`)
 
 If a request cannot be fulfilled with a one-liner, create role-specific scripts (service vs client) that fully specify flags, channels, RPC endpoints, and wallet paths.
+
+This repo also provides dev-oriented role scripts:
+- `scripts/run-swap-maker.sh`, `scripts/run-swap-maker.ps1`
+- `scripts/run-swap-taker.sh`, `scripts/run-swap-taker.ps1`
 ## Quick Start (Clone + Run)
 Use Pear runtime only (never native node).
 

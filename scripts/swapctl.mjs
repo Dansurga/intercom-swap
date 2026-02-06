@@ -28,7 +28,9 @@ Required connection flags:
   --token <sc-bridge-token>
 
 Commands:
+  info
   stats
+  watch [--channels <a,b,c>] [--kinds <k1,k2>] [--trade-id <id>] [--pretty 0|1] [--raw 0|1]
   join --channel <name> [--invite <b64|json|@file>] [--welcome <b64|json|@file>]
   open --channel <name> --via <entryChannel> [--invite ...] [--welcome ...]
   send --channel <name> (--text <msg> | --json <obj|@file>)
@@ -67,6 +69,24 @@ function parseArgs(argv) {
     }
   }
   return { args, flags };
+}
+
+function splitCsv(value) {
+  if (value === undefined || value === null) return [];
+  const s = String(value).trim();
+  if (!s) return [];
+  return s
+    .split(',')
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
+}
+
+function parseBoolFlag(value, fallback = false) {
+  if (value === undefined || value === null) return fallback;
+  if (value === true) return true;
+  const s = String(value).trim().toLowerCase();
+  if (!s) return fallback;
+  return ['1', 'true', 'yes', 'on'].includes(s);
 }
 
 function readTextMaybeFile(value) {
@@ -153,9 +173,64 @@ async function main() {
   const url = requireFlag(flags, 'url');
   const token = requireFlag(flags, 'token');
 
+  if (cmd === 'info') {
+    const res = await withScBridge({ url, token }, (sc) => sc.info());
+    process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
+    return;
+  }
+
   if (cmd === 'stats') {
     const res = await withScBridge({ url, token }, (sc) => sc.stats());
     process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
+    return;
+  }
+
+  if (cmd === 'watch') {
+    const channels = splitCsv(flags.get('channels') || flags.get('channel'));
+    const kinds = new Set(splitCsv(flags.get('kinds') || flags.get('kind')));
+    const tradeId = flags.get('trade-id') ? String(flags.get('trade-id')) : null;
+    const pretty = parseBoolFlag(flags.get('pretty'), false);
+    const raw = parseBoolFlag(flags.get('raw'), false);
+
+    const sc = new ScBridgeClient({ url, token });
+    await sc.connect();
+    try {
+      if (channels.length > 0) {
+        await sc.subscribe(channels);
+      }
+      sc.on('sidechannel_message', (evt) => {
+        const msg = evt?.message;
+        if (kinds.size > 0) {
+          const k = msg && typeof msg === 'object' ? msg.kind : null;
+          if (!k || !kinds.has(String(k))) return;
+        }
+        if (tradeId) {
+          const tid = msg && typeof msg === 'object' ? msg.trade_id : null;
+          if (String(tid || '') !== tradeId) return;
+        }
+
+        const out = raw
+          ? evt
+          : {
+              channel: evt?.channel ?? null,
+              from: evt?.from ?? null,
+              origin: evt?.origin ?? null,
+              relayedBy: evt?.relayedBy ?? null,
+              ts: evt?.ts ?? null,
+              message: msg,
+            };
+
+        if (pretty) process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+        else process.stdout.write(`${JSON.stringify(out)}\n`);
+      });
+
+      await new Promise((resolve) => {
+        process.on('SIGINT', resolve);
+        process.on('SIGTERM', resolve);
+      });
+    } finally {
+      sc.close();
+    }
     return;
   }
 
