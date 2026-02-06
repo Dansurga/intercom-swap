@@ -116,8 +116,11 @@ export class ScBridgeClient extends EventEmitter {
     return this._rpc('subscribe', { channels: list });
   }
 
+  async stats() {
+    return this._rpc('stats', {});
+  }
+
   async sign(payload) {
     return this._rpc('sign', { payload });
   }
 }
-

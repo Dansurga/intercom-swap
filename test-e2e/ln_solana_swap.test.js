@@ -98,6 +98,12 @@ function parseHex32(value, label) {
   return hex;
 }
 
+function hasConfirmedUtxo(listFundsResult) {
+  const outs = listFundsResult?.outputs;
+  if (!Array.isArray(outs)) return false;
+  return outs.some((o) => String(o?.status || '').toLowerCase() === 'confirmed');
+}
+
 async function startSolanaValidator({ soPath }) {
   const ledgerPath = path.join(repoRoot, 'onchain/solana/ledger-e2e');
   const url = 'https://api.devnet.solana.com';
@@ -193,12 +199,12 @@ test('e2e: LN<->Solana escrow flows', async (t) => {
 
   await retry(async () => {
     const funds = await clnCli('cln-alice', ['listfunds']);
-    if (!funds.outputs || funds.outputs.length === 0) throw new Error('alice not funded');
+    if (!hasConfirmedUtxo(funds)) throw new Error('alice not funded (no confirmed UTXO yet)');
     return funds;
   }, { label: 'alice funded' });
   await retry(async () => {
     const funds = await clnCli('cln-bob', ['listfunds']);
-    if (!funds.outputs || funds.outputs.length === 0) throw new Error('bob not funded');
+    if (!hasConfirmedUtxo(funds)) throw new Error('bob not funded (no confirmed UTXO yet)');
     return funds;
   }, { label: 'bob funded' });
 
@@ -206,7 +212,11 @@ test('e2e: LN<->Solana escrow flows', async (t) => {
   const aliceInfo = await clnCli('cln-alice', ['getinfo']);
   const aliceNodeId = aliceInfo.id;
   await clnCli('cln-bob', ['connect', `${aliceNodeId}@cln-alice:9735`]);
-  await clnCli('cln-bob', ['fundchannel', aliceNodeId, '1000000']); // 0.01 BTC-ish in sats (regtest)
+  await retry(() => clnCli('cln-bob', ['fundchannel', aliceNodeId, '1000000']), {
+    label: 'fundchannel',
+    tries: 30,
+    delayMs: 1000,
+  }); // 0.01 BTC-ish in sats (regtest)
   await btcCli(['-rpcwallet=miner', 'generatetoaddress', '6', minerAddr]);
 
   await retry(async () => {

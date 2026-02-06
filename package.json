@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "node --test test/*.test.js",
-    "test:e2e": "node --test test-e2e/*.test.js"
+    "test:e2e": "node --test --test-concurrency=1 test-e2e/*.test.js"
   },
   "pear": {
     "name": "contract-test-latest",

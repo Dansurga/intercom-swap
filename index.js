@@ -56,6 +56,13 @@ const parseBool = (value, fallback) => {
   return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
 };
 
+const msbEnabledRaw =
+  (flags['msb'] && String(flags['msb'])) ||
+  (flags['enable-msb'] && String(flags['enable-msb'])) ||
+  env.MSB_ENABLED ||
+  '';
+const msbEnabled = parseBool(msbEnabledRaw, true);
+
 const parseKeyValueList = (raw) => {
   if (!raw) return [];
   return String(raw)
@@ -357,12 +364,35 @@ const ensureKeypairFile = async (keyPairPath) => {
   wallet.exportToFile(keyPairPath, b4a.alloc(0));
 };
 
-await ensureKeypairFile(msbConfig.keyPairPath);
+if (msbEnabled) {
+  await ensureKeypairFile(msbConfig.keyPairPath);
+}
 await ensureKeypairFile(peerConfig.keyPairPath);
 
-console.log('=============== STARTING MSB ===============');
-const msb = new MainSettlementBus(msbConfig);
-await msb.ready();
+let msb = null;
+if (msbEnabled) {
+  console.log('=============== STARTING MSB ===============');
+  msb = new MainSettlementBus(msbConfig);
+  await msb.ready();
+} else {
+  console.log('=============== MSB DISABLED ===============');
+  // Provide a minimal MSB surface so trac-peer can initialize MsbClient without networking.
+  msb = {
+    config: msbConfig,
+    state: {
+      getIndexerSequenceState: async () => b4a.alloc(0),
+      getSignedLength: () => 0,
+      getUnsignedLength: () => 0,
+      getFee: () => null,
+      getNodeEntryUnsigned: async () => null,
+    },
+    network: {
+      validatorConnectionManager: { connectionCount: () => 0 },
+    },
+    ready: async () => {},
+    broadcastTransactionCommand: async () => ({ message: 'MSB disabled.', tx: null }),
+  };
+}
 
 console.log('=============== STARTING PEER ===============');
 const peer = new Peer({
