@@ -208,14 +208,14 @@ export function validateSwapBody(kind, body) {
       if (!isUint(body.trade_fee_bps)) {
         return { ok: false, error: 'terms.trade_fee_bps must be an integer >= 0' };
       }
-      if (Number(body.platform_fee_bps) > 2500) {
-        return { ok: false, error: 'terms.platform_fee_bps exceeds 2500 bps cap' };
+      if (Number(body.platform_fee_bps) > 500) {
+        return { ok: false, error: 'terms.platform_fee_bps exceeds 500 bps cap' };
       }
-      if (Number(body.trade_fee_bps) > 2500) {
-        return { ok: false, error: 'terms.trade_fee_bps exceeds 2500 bps cap' };
+      if (Number(body.trade_fee_bps) > 1000) {
+        return { ok: false, error: 'terms.trade_fee_bps exceeds 1000 bps cap' };
       }
-      if (Number(body.platform_fee_bps) + Number(body.trade_fee_bps) > 2500) {
-        return { ok: false, error: 'terms total fee bps exceeds 2500 bps cap' };
+      if (Number(body.platform_fee_bps) + Number(body.trade_fee_bps) > 1500) {
+        return { ok: false, error: 'terms total fee bps exceeds 1500 bps cap' };
       }
       if (body.platform_fee_collector !== undefined && body.platform_fee_collector !== null) {
         if (!isBase58(body.platform_fee_collector)) {

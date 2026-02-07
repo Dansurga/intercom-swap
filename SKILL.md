@@ -827,15 +827,16 @@ The Solana escrow program charges fees **on top** (paid by the depositor):
 There are 2 independent fee configs:
 1) Platform fee (program-wide):
 - `config` PDA (seed `b"config"`)
-- fields: `fee_collector`, `fee_bps` (capped at **2500 bps (25%)**)
+- fields: `fee_collector`, `fee_bps` (capped at **500 bps (5%)**)
 - fees accrue into a **platform fee-vault ATA** owned by the `config` PDA (per mint)
 2) Trade fee (per fee receiver):
 - `trade_config` PDA (seed `b"trade_config"`, keyed by `fee_collector`)
-- fields: `fee_collector`, `fee_bps` (capped at **2500 bps (25%)**)
+- fields: `fee_collector`, `fee_bps` (capped at **1000 bps (10%)**)
 - fees accrue into a **trade fee-vault ATA** owned by the `trade_config` PDA (per mint)
 
 Safety rule:
-- `platform_fee_bps + trade_fee_bps <= 2500` must hold (25% total cap).
+- `platform_fee_bps + trade_fee_bps <= 1500` must hold (15% total cap).
+- `0` bps is allowed for either fee (including total `0`).
 
 Operational notes:
 - The platform `config` PDA must be initialized once per cluster before `init_escrow` will work.

@@ -20,7 +20,11 @@ solana_program::declare_id!("4RS6xpspM1V2K7FKSqeSH6VVaZbtzHzhJqacwrz8gJrF");
 const ESCROW_SEED: &[u8] = b"escrow";
 const CONFIG_SEED: &[u8] = b"config";
 const TRADE_CONFIG_SEED: &[u8] = b"trade_config";
-const MAX_FEE_BPS: u16 = 2500; // 25% cap for safety; adjust via program upgrade if needed.
+// Fee caps are enforced on-chain (and re-validated during escrow init).
+// Basis points: 10_000 = 100%.
+const MAX_PLATFORM_FEE_BPS: u16 = 500; // 5%
+const MAX_TRADE_FEE_BPS: u16 = 1000; // 10%
+const MAX_TOTAL_FEE_BPS: u16 = 1500; // 15% (platform + trade)
 
 #[repr(u32)]
 enum EscrowError {
@@ -314,7 +318,7 @@ fn process_init_trade_config(
     assert_writable(payer)?;
     assert_writable(trade_config)?;
 
-    if fee_bps > MAX_FEE_BPS {
+    if fee_bps > MAX_TRADE_FEE_BPS {
         msg!("fee_bps too high");
         return Err(EscrowError::FeeTooHigh.into());
     }
@@ -378,7 +382,7 @@ fn process_set_trade_config(
     assert_signer(authority)?;
     assert_writable(trade_config)?;
 
-    if fee_bps > MAX_FEE_BPS {
+    if fee_bps > MAX_TRADE_FEE_BPS {
         msg!("fee_bps too high");
         return Err(EscrowError::FeeTooHigh.into());
     }
@@ -535,7 +539,7 @@ fn process_init_config(
     assert_writable(payer)?;
     assert_writable(config)?;
 
-    if fee_bps > MAX_FEE_BPS {
+    if fee_bps > MAX_PLATFORM_FEE_BPS {
         msg!("fee_bps too high");
         return Err(EscrowError::FeeTooHigh.into());
     }
@@ -593,7 +597,7 @@ fn process_set_config(
     assert_signer(authority)?;
     assert_writable(config)?;
 
-    if fee_bps > MAX_FEE_BPS {
+    if fee_bps > MAX_PLATFORM_FEE_BPS {
         msg!("fee_bps too high");
         return Err(EscrowError::FeeTooHigh.into());
     }
@@ -791,7 +795,7 @@ fn process_init(
         msg!("config state version/bump mismatch");
         return Err(EscrowError::InvalidConfigState.into());
     }
-    if config_state.fee_bps > MAX_FEE_BPS {
+    if config_state.fee_bps > MAX_PLATFORM_FEE_BPS {
         msg!("config fee_bps too high");
         return Err(EscrowError::FeeTooHigh.into());
     }
@@ -823,7 +827,7 @@ fn process_init(
         msg!("trade config state version/bump mismatch");
         return Err(EscrowError::InvalidTradeConfigState.into());
     }
-    if trade_cfg_state.fee_bps > MAX_FEE_BPS {
+    if trade_cfg_state.fee_bps > MAX_TRADE_FEE_BPS {
         msg!("trade config fee_bps too high");
         return Err(EscrowError::FeeTooHigh.into());
     }
@@ -841,7 +845,7 @@ fn process_init(
     }
 
     let total_fee_bps: u32 = config_state.fee_bps as u32 + trade_cfg_state.fee_bps as u32;
-    if total_fee_bps > MAX_FEE_BPS as u32 {
+    if total_fee_bps > MAX_TOTAL_FEE_BPS as u32 {
         msg!("total fee_bps too high");
         return Err(EscrowError::FeeTooHigh.into());
     }
