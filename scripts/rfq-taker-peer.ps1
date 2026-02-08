@@ -27,4 +27,4 @@ if (-not (Test-Path -Path $keypairFile)) {
   throw "Missing peer keypair file: $keypairFile`nHint: this should be created by the peer on first start (storeName=$storeName)."
 }
 
-node scripts/rfq-taker.mjs --url ("ws://127.0.0.1:{0}" -f $scPort) --token $scToken --peer-keypair $keypairFile --receipts-db ("onchain/receipts/{0}.sqlite" -f $storeName) @rest
+node scripts/rfq-taker.mjs --url ("ws://127.0.0.1:{0}" -f $scPort) --token $scToken --peer-keypair $keypairFile --receipts-db ("onchain/receipts/rfq-bots/{0}/taker.sqlite" -f $storeName) @rest

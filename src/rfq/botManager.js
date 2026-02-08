@@ -11,6 +11,14 @@ function safeName(name) {
   return String(name || '').replaceAll(/[^a-zA-Z0-9._-]/g, '_');
 }
 
+function assertSafeId(label, value) {
+  const s = String(value || '');
+  if (!/^[A-Za-z0-9._-]+$/.test(s)) {
+    throw new Error(`${label} must match /^[A-Za-z0-9._-]+$/ (got: ${JSON.stringify(s)})`);
+  }
+  return s;
+}
+
 function resolvePathMaybeRelative(p, { baseDir }) {
   const s = String(p || '').trim();
   if (!s) return '';
@@ -30,6 +38,12 @@ export function rfqbotStatePaths({ repoRoot, name }) {
     pid: path.join(stateDir, `${safe}.pid`),
     log: path.join(stateDir, `${safe}.log`),
   };
+}
+
+export function defaultRfqbotReceiptsDbPath({ repoRoot, store, name }) {
+  const safeStore = safeName(assertSafeId('rfqbotStart: store', store));
+  const safeBot = safeName(name);
+  return path.join(repoRoot, 'onchain', 'receipts', 'rfq-bots', safeStore, `${safeBot}.sqlite`);
 }
 
 function readJson(p) {
@@ -102,6 +116,7 @@ export function rfqbotStart({
   if (!name) throw new Error('rfqbotStart: name is required');
   if (role !== 'maker' && role !== 'taker') throw new Error('rfqbotStart: role must be maker|taker');
   if (!store) throw new Error('rfqbotStart: store is required');
+  assertSafeId('rfqbotStart: store', store);
   if (!Number.isInteger(scPort) || scPort <= 0 || scPort > 65535) throw new Error('rfqbotStart: scPort invalid');
 
   const paths = rfqbotStatePaths({ repoRoot, name });
@@ -110,7 +125,7 @@ export function rfqbotStart({
   const log = resolvePathMaybeRelative(logPath, { baseDir: repoRoot }) || paths.log;
   const receipts = receiptsDb
     ? resolvePathMaybeRelative(receiptsDb, { baseDir: repoRoot })
-    : path.join(repoRoot, 'onchain', 'receipts', `${store}.sqlite`);
+    : defaultRfqbotReceiptsDbPath({ repoRoot, store, name });
 
   const args = buildBotArgs({ repoRoot, role, store, scPort, receiptsDb: receipts, argv });
 

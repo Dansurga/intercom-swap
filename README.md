@@ -286,7 +286,7 @@ Prefer `rfqbotmgr` for tool-call operation: stop/restart individual bot instance
 | `--once 0|1` | Exit after one completed swap (default `0`) |
 | `--once-exit-delay-ms <n>` | Delay before exiting when `--once 1` (default `750`) |
 | `--debug 0|1` | Verbose logs (default `0`) |
-| `--receipts-db <path>` | Receipts DB path (recommended: `onchain/receipts/<name>.sqlite`) |
+| `--receipts-db <path>` | Receipts DB path (recommended: `onchain/receipts/rfq-bots/<store>/<bot>.sqlite`) |
 
 ##### Price Guard (Fail-Closed Quoting)
 
@@ -358,7 +358,7 @@ Prefer `rfqbotmgr` for tool-call operation: stop/restart individual bot instance
 | `--once 0|1` | Exit after one completed swap (default `0`) |
 | `--once-exit-delay-ms <n>` | Delay before exiting when `--once 1` (default `200`) |
 | `--debug 0|1` | Verbose logs (default `0`) |
-| `--receipts-db <path>` | Receipts DB path (recommended: `onchain/receipts/<name>.sqlite`) |
+| `--receipts-db <path>` | Receipts DB path (recommended: `onchain/receipts/rfq-bots/<store>/<bot>.sqlite`) |
 | `--persist-preimage 0|1` | Persist `ln_preimage_hex` into receipts (default `1` when receipts enabled) |
 | `--stop-after-ln-pay 0|1` | Testing/recovery hook: stop after paying LN (default `0`) |
 

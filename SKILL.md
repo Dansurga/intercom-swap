@@ -156,8 +156,9 @@ To avoid copy/pasting SC-Bridge URLs/tokens for the bots, use:
 - `scripts/rfq-maker-peer.sh`, `scripts/rfq-maker-peer.ps1`
 - `scripts/rfq-taker-peer.sh`, `scripts/rfq-taker-peer.ps1`
 
-These wrappers also set `--receipts-db onchain/receipts/<store>.sqlite` by default (local-only; gitignored) so swaps have a recovery path.
+These wrappers also set `--receipts-db onchain/receipts/rfq-bots/<store>/<role>.sqlite` by default (local-only; gitignored) so swaps have a recovery path.
 They also pass `--peer-keypair stores/<store>/db/keypair.json` so bots can sign swap envelopes locally.
+For multiple concurrent bot instances, prefer `rfqbotmgr` (or pass an explicit unique `--receipts-db` per bot) to avoid SQLite write contention.
 
 For tool-call friendly lifecycle control (start/stop/restart specific bot instances without stopping the peer), use:
 - `scripts/rfqbotmgr.mjs` (wrappers: `scripts/rfqbotmgr.sh`, `scripts/rfqbotmgr.ps1`)
@@ -1006,13 +1007,14 @@ Bot guardrails (defaults are fail-closed):
 ### Receipts + Recovery (Mandatory)
 Swaps require a local-only recovery path in case an agent crashes mid-trade.
 
-- Maker/taker bots can be run with `--receipts-db onchain/receipts/<name>.sqlite` to persist a minimal “trade receipt” (payment hash, Solana escrow addresses, timelocks, etc.).
+- Maker/taker bots can be run with `--receipts-db onchain/receipts/rfq-bots/<store>/<bot>.sqlite` to persist a minimal “trade receipt” (payment hash, Solana escrow addresses, timelocks, etc.).
+  - `rfqbotmgr` defaults to `onchain/receipts/rfq-bots/<store>/<name>.sqlite` (per bot instance) if you don’t pass `--receipts-db`.
 - If `--receipts-db` is set on the taker, the taker defaults to persisting `ln_preimage_hex` too (sensitive, but required for offline recovery). Disable with `--persist-preimage 0` if your LN stack can reliably re-export preimages later.
 
 Recovery tool:
-- `scripts/swaprecover.sh show --receipts-db onchain/receipts/<name>.sqlite --trade-id <id>`
-- `scripts/swaprecover.sh claim --receipts-db onchain/receipts/<name>.sqlite --trade-id <id> --solana-rpc-url <rpc> --solana-keypair onchain/.../keypair.json`
-- `scripts/swaprecover.sh refund --receipts-db onchain/receipts/<name>.sqlite --trade-id <id> --solana-rpc-url <rpc> --solana-keypair onchain/.../keypair.json`
+- `scripts/swaprecover.sh show --receipts-db onchain/receipts/rfq-bots/<store>/<bot>.sqlite --trade-id <id>`
+- `scripts/swaprecover.sh claim --receipts-db onchain/receipts/rfq-bots/<store>/<bot>.sqlite --trade-id <id> --solana-rpc-url <rpc> --solana-keypair onchain/.../keypair.json`
+- `scripts/swaprecover.sh refund --receipts-db onchain/receipts/rfq-bots/<store>/<bot>.sqlite --trade-id <id> --solana-rpc-url <rpc> --solana-keypair onchain/.../keypair.json`
   - Optional: add `--solana-cu-limit <units>` and/or `--solana-cu-price <microLamports>` to tune priority fees.
 
 ### Local Unattended E2E (Recommended)
