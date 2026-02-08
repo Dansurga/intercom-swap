@@ -6,6 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import net from 'node:net';
 
 import b4a from 'b4a';
 import PeerWallet from 'trac-wallet';
@@ -126,6 +127,25 @@ function parseHex32(value, label) {
   const hex = String(value || '').trim().toLowerCase();
   assert.match(hex, /^[0-9a-f]{64}$/, `${label} must be 32-byte hex`);
   return hex;
+}
+
+async function pickFreePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const addr = srv.address();
+      const port = typeof addr === 'object' && addr ? addr.port : 0;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+async function pickFreePorts(n) {
+  const out = new Set();
+  while (out.size < n) out.add(await pickFreePort());
+  return Array.from(out);
 }
 
 async function startSolanaValidator({ soPath, ledgerSuffix }) {
@@ -279,14 +299,24 @@ function parseJsonLines(text) {
 
 async function killProc(proc) {
   if (!proc || proc.killed) return;
+  const waitExit = (ms) =>
+    new Promise((resolve) => {
+      const t = setTimeout(resolve, ms);
+      proc.once('exit', () => {
+        clearTimeout(t);
+        resolve();
+      });
+    });
   try {
     proc.kill('SIGINT');
-  } catch (_e) {
+  } catch (_e) {}
+  await waitExit(2500);
+  if (!proc.killed) {
     try {
       proc.kill('SIGKILL');
-    } catch (_e2) {}
+    } catch (_e) {}
+    await waitExit(2500);
   }
-  await new Promise((r) => proc.once('exit', r));
 }
 
 async function signEnvelopeViaBridge(sc, unsignedEnvelope) {
@@ -352,6 +382,8 @@ test('e2e: sidechannel swap protocol + LN regtest + Solana escrow', async (t) =>
   const tradeId = `swap_e2e_${runId}`;
   const rfqChannel = `btc-usdt-sol-rfq-${runId}`;
   const swapChannel = `swap:${tradeId}`;
+  let makerBot = null;
+  let takerBot = null;
 
   // Avoid relying on external DHT bootstrap nodes for e2e reliability.
   // Peers are configured to use this local bootstrapper via --dht-bootstrap.
@@ -513,10 +545,7 @@ test('e2e: sidechannel swap protocol + LN regtest + Solana escrow', async (t) =>
   const aliceTokenWs = `token-alice-${runId}`;
   const bobTokenWs = `token-bob-${runId}`;
   const eveTokenWs = `token-eve-${runId}`;
-  const portBase = 45000 + crypto.randomInt(0, 1000);
-  const alicePort = portBase;
-  const bobPort = portBase + 1;
-  const evePort = portBase + 2;
+  const [alicePort, bobPort, evePort] = await pickFreePorts(3);
 
   const alicePeer = spawnPeer(
     [
@@ -648,6 +677,9 @@ test('e2e: sidechannel swap protocol + LN regtest + Solana escrow', async (t) =>
   );
 
   t.after(async () => {
+    // Bots are not covered by the peer kill hooks below; always tear them down.
+    await killProc(takerBot?.proc);
+    await killProc(makerBot?.proc);
     await killProc(evePeer.proc);
     await killProc(bobPeer.proc);
     await killProc(alicePeer.proc);
@@ -666,6 +698,16 @@ test('e2e: sidechannel swap protocol + LN regtest + Solana escrow', async (t) =>
     bobSc.close();
     aliceSc.close();
   });
+
+  // Ensure sidechannels have passed the DHT bootstrap barrier and joined topics.
+  await retry(async () => {
+    const s = await aliceSc.stats();
+    if (s.type !== 'stats' || s.sidechannelStarted !== true) throw new Error('alice sidechannel not started');
+  }, { label: 'alice sidechannel started', tries: 200, delayMs: 250 });
+  await retry(async () => {
+    const s = await bobSc.stats();
+    if (s.type !== 'stats' || s.sidechannelStarted !== true) throw new Error('bob sidechannel not started');
+  }, { label: 'bob sidechannel started', tries: 200, delayMs: 250 });
 
   await aliceSc.subscribe([rfqChannel, swapChannel]);
   await bobSc.subscribe([rfqChannel, swapChannel]);
@@ -689,6 +731,31 @@ test('e2e: sidechannel swap protocol + LN regtest + Solana escrow', async (t) =>
     if (evt.channel === swapChannel) seen.eve.swap.push(evt.message);
   });
 
+  // Connectivity barrier: ensure both peers can exchange messages on the RFQ channel before
+  // starting the RFQ bots (reduces flakiness on slow/bootstrapping hyperswarm discovery).
+  await sendUntilReceived({
+    sender: aliceSc,
+    receiverSeen: seen.bob.rfq,
+    channel: rfqChannel,
+    message: { type: 'e2e_ping', from: 'alice', runId },
+    match: (m) => m?.type === 'e2e_ping' && m?.from === 'alice' && m?.runId === runId,
+    label: 'rfq ping alice->bob',
+    tries: 80,
+    delayMs: 250,
+    perTryTimeoutMs: 1500,
+  });
+  await sendUntilReceived({
+    sender: bobSc,
+    receiverSeen: seen.alice.rfq,
+    channel: rfqChannel,
+    message: { type: 'e2e_ping', from: 'bob', runId },
+    match: (m) => m?.type === 'e2e_ping' && m?.from === 'bob' && m?.runId === runId,
+    label: 'rfq ping bob->alice',
+    tries: 80,
+    delayMs: 250,
+    perTryTimeoutMs: 1500,
+  });
+
   let aliceTrade = createInitialTrade(tradeId);
   let bobTrade = createInitialTrade(tradeId);
 
@@ -701,7 +768,7 @@ test('e2e: sidechannel swap protocol + LN regtest + Solana escrow', async (t) =>
 
   const beforeBal = (await getAccount(connection, clientToken, 'confirmed')).amount;
 
-  const makerBot = spawnBot(
+  makerBot = spawnBot(
     [
       'scripts/rfq-maker.mjs',
       '--url',
@@ -738,7 +805,7 @@ test('e2e: sidechannel swap protocol + LN regtest + Solana escrow', async (t) =>
     { label: 'maker-bot' }
   );
 
-  const takerBot = spawnBot(
+  takerBot = spawnBot(
     [
       'scripts/rfq-taker.mjs',
       '--url',

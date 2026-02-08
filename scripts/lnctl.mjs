@@ -5,7 +5,19 @@ import { fileURLToPath } from 'node:url';
 
 import { normalizeClnNetwork } from '../src/ln/cln.js';
 import { normalizeLndNetwork } from '../src/ln/lnd.js';
-import { lnConnect, lnDecodePay, lnFundChannel, lnGetInfo, lnInvoice, lnListFunds, lnNewAddress, lnPay, lnPayStatus, lnPreimageGet } from '../src/ln/client.js';
+import {
+  lnConnect,
+  lnDecodePay,
+  lnFundChannel,
+  lnGetInfo,
+  lnInvoice,
+  lnListFunds,
+  lnNewAddress,
+  lnPay,
+  lnPayStatus,
+  lnPreimageGet,
+  lnWithdraw,
+} from '../src/ln/client.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,6 +56,7 @@ Commands:
   newaddr
   listfunds
   balance
+  withdraw --to <address> --amount-sats <n> [--sat-per-vbyte <n>]
   connect --peer <nodeid@host:port>
   fundchannel --node-id <hex> --amount-sats <n>
   invoice --msat <amountmsat> --label <label> --desc <text> [--expiry <sec>]
@@ -252,6 +265,31 @@ async function main() {
       channel_total_msat: sums.channelTotal.toString(),
       raw: funds,
     }, null, 2)}\n`);
+    return;
+  }
+
+  if (cmd === 'withdraw') {
+    const to = requireFlag(flags, 'to');
+    const amountSats = parseIntFlag(requireFlag(flags, 'amount-sats'), 'amount-sats');
+    if (!Number.isInteger(amountSats) || amountSats <= 0) die('Invalid --amount-sats');
+    const satPerVbyte = parseIntFlag(flags.get('sat-per-vbyte'), 'sat-per-vbyte', null);
+
+    const r = await lnWithdraw({
+      impl,
+      backend,
+      composeFile,
+      service,
+      network,
+      cliBin,
+      cwd: repoRoot,
+      lnd: {
+        rpcserver: flags.get('lnd-rpcserver') ? String(flags.get('lnd-rpcserver')).trim() : '',
+        tlscertpath: flags.get('lnd-tlscert') ? String(flags.get('lnd-tlscert')).trim() : '',
+        macaroonpath: flags.get('lnd-macaroon') ? String(flags.get('lnd-macaroon')).trim() : '',
+        lnddir: flags.get('lnd-dir') ? String(flags.get('lnd-dir')).trim() : '',
+      },
+    }, { address: to, amountSats, satPerVbyte });
+    process.stdout.write(`${JSON.stringify({ type: 'withdraw', to, amount_sats: amountSats, sat_per_vbyte: satPerVbyte, result: r }, null, 2)}\n`);
     return;
   }
 

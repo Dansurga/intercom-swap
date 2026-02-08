@@ -5,6 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { mkdir } from 'node:fs/promises';
+import net from 'node:net';
 
 import b4a from 'b4a';
 import PeerWallet from 'trac-wallet';
@@ -63,6 +64,25 @@ async function writePeerKeypair({ storesDir, storeName }) {
     pubHex: b4a.toString(wallet.publicKey, 'hex'),
     secHex: b4a.toString(wallet.secretKey, 'hex'),
   };
+}
+
+async function pickFreePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const addr = srv.address();
+      const port = typeof addr === 'object' && addr ? addr.port : 0;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+async function pickFreePorts(n) {
+  const out = new Set();
+  while (out.size < n) out.add(await pickFreePort());
+  return Array.from(out);
 }
 
 function spawnPeer(args, { label }) {
@@ -228,14 +248,14 @@ test('e2e: RFQ maker/taker bots negotiate and join swap channel (sidechannel inv
 
   const makerToken = `token-maker-${runId}`;
   const takerToken = `token-taker-${runId}`;
-  const portBase = 46000 + crypto.randomInt(0, 1000);
-  const makerPort = portBase;
-  const takerPort = portBase + 1;
+  const [makerPort, takerPort] = await pickFreePorts(2);
 
   const makerPeer = spawnPeer(
     [
       '--peer-store-name',
       makerStore,
+      '--subnet-channel',
+      `e2e-rfq-subnet-${runId}`,
       '--msb',
       '0',
       '--price-oracle',
@@ -282,6 +302,8 @@ test('e2e: RFQ maker/taker bots negotiate and join swap channel (sidechannel inv
     [
       '--peer-store-name',
       takerStore,
+      '--subnet-channel',
+      `e2e-rfq-subnet-${runId}`,
       '--msb',
       '0',
       '--price-oracle',
@@ -344,6 +366,26 @@ test('e2e: RFQ maker/taker bots negotiate and join swap channel (sidechannel inv
     const s = await takerSc.stats();
     if (s.type !== 'stats' || s.sidechannelStarted !== true) throw new Error('taker sidechannel not started');
   }, { label: 'taker sidechannel started', tries: 200, delayMs: 250 });
+
+  // Connectivity barrier: ensure peers can exchange messages in the RFQ channel before starting bots.
+  ensureOk(await makerSc.join(rfqChannel), `join ${rfqChannel} (maker)`);
+  ensureOk(await takerSc.join(rfqChannel), `join ${rfqChannel} (taker)`);
+  ensureOk(await makerSc.subscribe([rfqChannel]), `subscribe ${rfqChannel} (maker)`);
+  ensureOk(await takerSc.subscribe([rfqChannel]), `subscribe ${rfqChannel} (taker)`);
+  ensureOk(await makerSc.send(rfqChannel, { type: 'e2e_ping', from: 'maker', runId }), 'send ping maker->taker');
+  await waitForSidechannel(takerSc, {
+    channel: rfqChannel,
+    pred: (m) => m?.type === 'e2e_ping' && m?.from === 'maker' && m?.runId === runId,
+    timeoutMs: 20_000,
+    label: 'ping maker->taker',
+  });
+  ensureOk(await takerSc.send(rfqChannel, { type: 'e2e_ping', from: 'taker', runId }), 'send ping taker->maker');
+  await waitForSidechannel(makerSc, {
+    channel: rfqChannel,
+    pred: (m) => m?.type === 'e2e_ping' && m?.from === 'taker' && m?.runId === runId,
+    timeoutMs: 20_000,
+    label: 'ping taker->maker',
+  });
 
   makerSc.close();
   takerSc.close();
@@ -443,15 +485,14 @@ test('e2e: maker rejects quote_accept from non-RFQ signer (prevents quote hijack
   const makerToken = `token-maker-hijack-${runId}`;
   const takerToken = `token-taker-hijack-${runId}`;
   const attackerToken = `token-attacker-hijack-${runId}`;
-  const portBase = 47000 + crypto.randomInt(0, 1000);
-  const makerPort = portBase;
-  const takerPort = portBase + 1;
-  const attackerPort = portBase + 2;
+  const [makerPort, takerPort, attackerPort] = await pickFreePorts(3);
 
   const makerPeer = spawnPeer(
     [
       '--peer-store-name',
       makerStore,
+      '--subnet-channel',
+      `e2e-rfq-hijack-subnet-${runId}`,
       '--msb',
       '0',
       '--price-oracle',
@@ -498,6 +539,8 @@ test('e2e: maker rejects quote_accept from non-RFQ signer (prevents quote hijack
     [
       '--peer-store-name',
       takerStore,
+      '--subnet-channel',
+      `e2e-rfq-hijack-subnet-${runId}`,
       '--msb',
       '0',
       '--price-oracle',
@@ -544,6 +587,8 @@ test('e2e: maker rejects quote_accept from non-RFQ signer (prevents quote hijack
     [
       '--peer-store-name',
       attackerStore,
+      '--subnet-channel',
+      `e2e-rfq-hijack-subnet-${runId}`,
       '--msb',
       '0',
       '--price-oracle',
@@ -618,6 +663,19 @@ test('e2e: maker rejects quote_accept from non-RFQ signer (prevents quote hijack
     const s = await attackerSc.stats();
     if (s.type !== 'stats' || s.sidechannelStarted !== true) throw new Error('attacker sidechannel not started');
   }, { label: 'attacker sidechannel started (hijack)', tries: 200, delayMs: 250 });
+
+  // Connectivity barrier: ensure maker/taker can exchange messages before driving the hijack scenario.
+  ensureOk(await makerSc.join(rfqChannel), `join ${rfqChannel} (maker)`);
+  ensureOk(await takerSc.join(rfqChannel), `join ${rfqChannel} (taker)`);
+  ensureOk(await makerSc.subscribe([rfqChannel]), `subscribe ${rfqChannel} (maker)`);
+  ensureOk(await takerSc.subscribe([rfqChannel]), `subscribe ${rfqChannel} (taker)`);
+  ensureOk(await makerSc.send(rfqChannel, { type: 'e2e_ping', from: 'maker', runId }), 'send ping maker->taker (hijack)');
+  await waitForSidechannel(takerSc, {
+    channel: rfqChannel,
+    pred: (m) => m?.type === 'e2e_ping' && m?.from === 'maker' && m?.runId === runId,
+    timeoutMs: 20_000,
+    label: 'ping maker->taker (hijack)',
+  });
 
   ensureOk(await takerSc.join(rfqChannel), `join ${rfqChannel} (taker)`);
   ensureOk(await attackerSc.join(rfqChannel), `join ${rfqChannel} (attacker)`);

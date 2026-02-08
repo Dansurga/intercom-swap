@@ -1017,12 +1017,22 @@ class Sidechannel extends Feature {
 
     // Hyperswarm can accept `join()` calls before the DHT is fully bootstrapped.
     // In practice this can lead to missed announces/lookups and permanent
-    // non-discovery until restart. Wait for the DHT readiness barrier when
-    // available, then proceed with the normal join+flush path.
+    // non-discovery until restart.
+    //
+    // Wait for the DHT readiness barrier when available, but do NOT hang forever:
+    // - Some local/test setups can take a long time to reach "fullyBootstrapped".
+    // - If we block start() indefinitely, sidechannels never come up.
+    //
+    // To preserve reliability, we also re-join+flush topics once fully bootstrapped.
     const dht = this.peer.swarm.dht;
+    let bootPromise = null;
     if (dht && typeof dht.fullyBootstrapped === 'function') {
       if (this.debug) console.log('[sidechannel] waiting for DHT bootstrap...');
-      await dht.fullyBootstrapped();
+      bootPromise = Promise.resolve()
+        .then(() => dht.fullyBootstrapped())
+        .catch(() => {});
+      const timeoutMs = 10_000;
+      await Promise.race([bootPromise, new Promise((resolve) => setTimeout(resolve, timeoutMs))]);
     }
 
     this.peer.swarm.on('connection', (connection) => {
@@ -1039,7 +1049,34 @@ class Sidechannel extends Feature {
     for (const entry of this.channels.values()) {
       this.peer.swarm.join(entry.topic, { server: true, client: true });
     }
-    await this.peer.swarm.flush();
+    // Flush can hang if bootstrap is unavailable. Bound the wait so SC-Bridge and
+    // other features can still come up; we will re-join+flush post-bootstrap.
+    {
+      const flushTimeoutMs = 10_000;
+      const flushP = Promise.resolve()
+        .then(() => this.peer.swarm.flush())
+        .catch(() => {});
+      await Promise.race([flushP, new Promise((resolve) => setTimeout(resolve, flushTimeoutMs))]);
+    }
+    this.started = true;
+
+    // If DHT bootstrapping completes after we already joined/flushed, re-join
+    // and flush to ensure announces/lookups happen post-bootstrap.
+    if (bootPromise) {
+      bootPromise.then(async () => {
+        try {
+          if (!this.started) return;
+          for (const entry of this.channels.values()) {
+            this.peer.swarm.join(entry.topic, { server: true, client: true });
+          }
+          const flushTimeoutMs = 10_000;
+          const flushP = Promise.resolve()
+            .then(() => this.peer.swarm.flush())
+            .catch(() => {});
+          await Promise.race([flushP, new Promise((resolve) => setTimeout(resolve, flushTimeoutMs))]);
+        } catch (_e) {}
+      });
+    }
 
     if (this.peer.swarm.connections) {
       for (const connection of this.peer.swarm.connections) {
@@ -1048,7 +1085,6 @@ class Sidechannel extends Feature {
         }
       }
     }
-    this.started = true;
   }
 
   async stop() {

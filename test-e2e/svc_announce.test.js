@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import net from 'node:net';
 
 import b4a from 'b4a';
 import PeerWallet from 'trac-wallet';
@@ -46,6 +47,25 @@ async function writePeerKeypair({ storesDir, storeName }) {
     keyPairPath,
     pubHex: b4a.toString(wallet.publicKey, 'hex'),
   };
+}
+
+async function pickFreePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const addr = srv.address();
+      const port = typeof addr === 'object' && addr ? addr.port : 0;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+async function pickFreePorts(n) {
+  const out = new Set();
+  while (out.size < n) out.add(await pickFreePort());
+  return Array.from(out);
 }
 
 function spawnPeer(args, { label }) {
@@ -133,14 +153,14 @@ test('e2e: svc_announce re-broadcast reaches late joiners', async (t) => {
 
   const announcerToken = `token-announcer-${runId}`;
   const listenerToken = `token-listener-${runId}`;
-  const portBase = 47000 + crypto.randomInt(0, 1000);
-  const announcerPort = portBase;
-  const listenerPort = portBase + 1;
+  const [announcerPort, listenerPort] = await pickFreePorts(2);
 
   const announcerPeer = spawnPeer(
     [
       '--peer-store-name',
       announcerStore,
+      '--subnet-channel',
+      `e2e-svc-subnet-${runId}`,
       '--msb',
       '0',
       '--dht-bootstrap',
@@ -223,6 +243,8 @@ test('e2e: svc_announce re-broadcast reaches late joiners', async (t) => {
     [
       '--peer-store-name',
       listenerStore,
+      '--subnet-channel',
+      `e2e-svc-subnet-${runId}`,
       '--msb',
       '0',
       '--dht-bootstrap',

@@ -1,7 +1,16 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import crypto from 'node:crypto';
 
-import { PublicKey } from '@solana/web3.js';
-import { createAssociatedTokenAccount, getAccount, getAssociatedTokenAddress } from '@solana/spl-token';
+import { Keypair, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
+import {
+  createAssociatedTokenAccount,
+  createMint,
+  getAccount,
+  getAssociatedTokenAddress,
+  mintTo,
+  transfer as splTransfer,
+} from '@solana/spl-token';
 
 import { ScBridgeClient } from '../sc-bridge/client.js';
 import { createUnsignedEnvelope, attachSignature, verifySignedEnvelope } from '../protocol/signedMessage.js';
@@ -27,9 +36,10 @@ import {
   lnPay,
   lnPayStatus,
   lnPreimageGet,
+  lnWithdraw,
 } from '../ln/client.js';
 
-import { readSolanaKeypair } from '../solana/keypair.js';
+import { generateSolanaKeypair, readSolanaKeypair, writeSolanaKeypair } from '../solana/keypair.js';
 import { SolanaRpcPool } from '../solana/rpcPool.js';
 import {
   LN_USDT_ESCROW_PROGRAM_ID,
@@ -136,6 +146,21 @@ function normalizeAtomicAmount(s, label = 'amount') {
   const v = String(s || '').trim();
   if (!/^[0-9]+$/.test(v)) throw new Error(`${label} must be a decimal string integer`);
   return v;
+}
+
+const SOL_REFUND_MIN_SEC = 3600; // 1h
+const SOL_REFUND_MAX_SEC = 7 * 24 * 3600; // 1w
+
+function assertRefundAfterUnixWindow(refundAfterUnix, toolName) {
+  const now = Math.floor(Date.now() / 1000);
+  const delta = Number(refundAfterUnix) - now;
+  if (!Number.isFinite(delta)) throw new Error(`${toolName}: refund_after_unix invalid`);
+  if (delta < SOL_REFUND_MIN_SEC) {
+    throw new Error(`${toolName}: refund_after_unix too soon (min ${SOL_REFUND_MIN_SEC}s from now)`);
+  }
+  if (delta > SOL_REFUND_MAX_SEC) {
+    throw new Error(`${toolName}: refund_after_unix too far (max ${SOL_REFUND_MAX_SEC}s from now)`);
+  }
 }
 
 function stripSignature(envelope) {
@@ -268,6 +293,27 @@ async function getOrCreateAta(connection, payerKeypair, owner, mint, commitment)
   return ata;
 }
 
+function resolveRepoPath(p) {
+  const s = String(p || '').trim();
+  if (!s) throw new Error('path is required');
+  return path.isAbsolute(s) ? s : path.resolve(process.cwd(), s);
+}
+
+function resolveOnchainPath(p, { label = 'path', allowDir = false } = {}) {
+  const resolved = resolveRepoPath(p);
+  const onchainRoot = path.resolve(process.cwd(), 'onchain');
+  const rel = path.relative(onchainRoot, resolved);
+  const within = rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+  if (!within && resolved !== onchainRoot) {
+    throw new Error(`${label} must be under onchain/ (got ${resolved})`);
+  }
+  if (!allowDir) {
+    const st = fs.existsSync(resolved) ? fs.statSync(resolved) : null;
+    if (st && st.isDirectory()) throw new Error(`${label} must be a file path (got directory)`);
+  }
+  return resolved;
+}
+
 export class ToolExecutor {
   constructor({
     scBridge,
@@ -322,6 +368,17 @@ export class ToolExecutor {
     if (!p) throw new Error('Solana signer not configured (set solana.keypair in prompt setup JSON)');
     this._solanaKeypair = readSolanaKeypair(p);
     return this._solanaKeypair;
+  }
+
+  async _openReceiptsStore({ required = false } = {}) {
+    const raw = String(this.receipts?.dbPath || '').trim();
+    if (!raw) {
+      if (required) throw new Error('receipts db not configured (set receipts.db in prompt setup JSON)');
+      return null;
+    }
+    const dbPath = resolveOnchainPath(raw, { label: 'receipts.db' });
+    const { TradeReceiptsStore } = await import('../receipts/store.js');
+    return TradeReceiptsStore.open({ dbPath });
   }
 
   async _scEnsurePersistent({ timeoutMs = 10_000 } = {}) {
@@ -852,6 +909,56 @@ export class ToolExecutor {
       return withScBridge(this.scBridge, (sc) => sc.join(swapChannel, { invite, welcome }));
     }
 
+    // RFQ bot manager (local processes; does not stop the peer)
+    if (toolName === 'intercomswap_rfqbot_status') {
+      assertAllowedKeys(args, toolName, ['name']);
+      const name = expectOptionalString(args, toolName, 'name', { min: 1, max: 64, pattern: /^[A-Za-z0-9._-]+$/ });
+      const { rfqbotStatus } = await import('../rfq/botManager.js');
+      return rfqbotStatus({ repoRoot: process.cwd(), name: name || '' });
+    }
+
+    if (toolName === 'intercomswap_rfqbot_start_maker' || toolName === 'intercomswap_rfqbot_start_taker') {
+      assertAllowedKeys(args, toolName, ['name', 'store', 'sc_port', 'receipts_db', 'argv']);
+      requireApproval(toolName, autoApprove);
+      const name = expectString(args, toolName, 'name', { min: 1, max: 64, pattern: /^[A-Za-z0-9._-]+$/ });
+      const store = expectString(args, toolName, 'store', { min: 1, max: 64, pattern: /^[A-Za-z0-9._-]+$/ });
+      const scPort = expectInt(args, toolName, 'sc_port', { min: 1, max: 65535 });
+      const receiptsDbArg = expectOptionalString(args, toolName, 'receipts_db', { min: 1, max: 400 });
+      const receiptsDb = receiptsDbArg ? resolveOnchainPath(receiptsDbArg, { label: 'receipts_db' }) : '';
+      const argv = Array.isArray(args.argv) ? args.argv.map((v) => String(v || '').trim()).filter(Boolean) : [];
+      if (argv.length > 80) throw new Error(`${toolName}: argv too long (max 80)`);
+      for (const a of argv) {
+        if (a.length > 200) throw new Error(`${toolName}: argv entry too long`);
+        if (/\r|\n/.test(a)) throw new Error(`${toolName}: argv must not contain newlines`);
+      }
+      const role = toolName === 'intercomswap_rfqbot_start_maker' ? 'maker' : 'taker';
+      if (dryRun) return { type: 'dry_run', tool: toolName, name, role, store, sc_port: scPort, receipts_db: receiptsDb || null, argv };
+      const { rfqbotStart } = await import('../rfq/botManager.js');
+      return rfqbotStart({ repoRoot: process.cwd(), name, role, store, scPort, receiptsDb, argv });
+    }
+
+    if (toolName === 'intercomswap_rfqbot_stop') {
+      assertAllowedKeys(args, toolName, ['name', 'signal', 'wait_ms']);
+      requireApproval(toolName, autoApprove);
+      const name = expectString(args, toolName, 'name', { min: 1, max: 64, pattern: /^[A-Za-z0-9._-]+$/ });
+      const signal = expectOptionalString(args, toolName, 'signal', { min: 3, max: 10 }) || 'SIGTERM';
+      if (!['SIGTERM', 'SIGINT', 'SIGKILL'].includes(signal)) throw new Error(`${toolName}: invalid signal`);
+      const waitMs = expectOptionalInt(args, toolName, 'wait_ms', { min: 0, max: 120_000 }) ?? 2000;
+      if (dryRun) return { type: 'dry_run', tool: toolName, name, signal, wait_ms: waitMs };
+      const { rfqbotStop } = await import('../rfq/botManager.js');
+      return rfqbotStop({ repoRoot: process.cwd(), name, signal, waitMs });
+    }
+
+    if (toolName === 'intercomswap_rfqbot_restart') {
+      assertAllowedKeys(args, toolName, ['name', 'wait_ms']);
+      requireApproval(toolName, autoApprove);
+      const name = expectString(args, toolName, 'name', { min: 1, max: 64, pattern: /^[A-Za-z0-9._-]+$/ });
+      const waitMs = expectOptionalInt(args, toolName, 'wait_ms', { min: 0, max: 120_000 }) ?? 2000;
+      if (dryRun) return { type: 'dry_run', tool: toolName, name, wait_ms: waitMs };
+      const { rfqbotRestart } = await import('../rfq/botManager.js');
+      return rfqbotRestart({ repoRoot: process.cwd(), name, waitMs });
+    }
+
     if (toolName === 'intercomswap_terms_post') {
       assertAllowedKeys(args, toolName, [
         'channel',
@@ -879,6 +986,7 @@ export class ToolExecutor {
       const solRecipient = normalizeBase58(expectString(args, toolName, 'sol_recipient', { max: 64 }), 'sol_recipient');
       const solRefund = normalizeBase58(expectString(args, toolName, 'sol_refund', { max: 64 }), 'sol_refund');
       const solRefundAfter = expectInt(args, toolName, 'sol_refund_after_unix', { min: 1 });
+      assertRefundAfterUnixWindow(solRefundAfter, toolName);
       const lnReceiverPeer = normalizeHex32(expectString(args, toolName, 'ln_receiver_peer', { min: 64, max: 64 }), 'ln_receiver_peer');
       const lnPayerPeer = normalizeHex32(expectString(args, toolName, 'ln_payer_peer', { min: 64, max: 64 }), 'ln_payer_peer');
       const platformFeeBps = expectInt(args, toolName, 'platform_fee_bps', { min: 0, max: 500 });
@@ -915,11 +1023,39 @@ export class ToolExecutor {
 
       if (dryRun) return { type: 'dry_run', tool: toolName, channel, unsigned };
 
-      return withScBridge(this.scBridge, async (sc) => {
-        const signed = await signSwapEnvelope(sc, unsigned);
-        await sendEnvelope(sc, channel, signed);
-        return { type: 'terms_posted', channel, terms_hash: hashTermsEnvelope(signed), envelope: signed };
-      });
+      const store = await this._openReceiptsStore({ required: true });
+      try {
+        return await withScBridge(this.scBridge, async (sc) => {
+          const signed = await signSwapEnvelope(sc, unsigned);
+          await sendEnvelope(sc, channel, signed);
+
+          const programId = this._programId().toBase58();
+          store.upsertTrade(tradeId, {
+            role: 'maker',
+            swap_channel: channel,
+            maker_peer: String(signed.signer || '').trim().toLowerCase() || lnReceiverPeer,
+            taker_peer: lnPayerPeer,
+            btc_sats: btcSats,
+            usdt_amount: usdtAmount,
+            sol_mint: solMint,
+            sol_program_id: programId,
+            sol_recipient: solRecipient,
+            sol_refund: solRefund,
+            sol_refund_after_unix: solRefundAfter,
+            state: 'terms',
+            last_error: null,
+          });
+          store.appendEvent(tradeId, 'terms_post', {
+            terms_hash: hashTermsEnvelope(signed),
+            channel,
+            program_id: programId,
+          });
+
+          return { type: 'terms_posted', channel, terms_hash: hashTermsEnvelope(signed), envelope: signed };
+        });
+      } finally {
+        store.close();
+      }
     }
 
     if (toolName === 'intercomswap_terms_accept') {
@@ -936,11 +1072,23 @@ export class ToolExecutor {
         body: { terms_hash: termsHash },
       });
       if (dryRun) return { type: 'dry_run', tool: toolName, channel, unsigned };
-      return withScBridge(this.scBridge, async (sc) => {
-        const signed = await signSwapEnvelope(sc, unsigned);
-        await sendEnvelope(sc, channel, signed);
-        return { type: 'terms_accept_posted', channel, envelope: signed };
-      });
+      const store = await this._openReceiptsStore({ required: true });
+      try {
+        return await withScBridge(this.scBridge, async (sc) => {
+          const signed = await signSwapEnvelope(sc, unsigned);
+          await sendEnvelope(sc, channel, signed);
+          store.upsertTrade(tradeId, {
+            role: 'taker',
+            swap_channel: channel,
+            state: 'accepted',
+            last_error: null,
+          });
+          store.appendEvent(tradeId, 'terms_accept', { channel, terms_hash: termsHash });
+          return { type: 'terms_accept_posted', channel, envelope: signed };
+        });
+      } finally {
+        store.close();
+      }
     }
 
     if (toolName === 'intercomswap_terms_accept_from_terms') {
@@ -966,11 +1114,38 @@ export class ToolExecutor {
         body: { terms_hash: termsHash },
       });
       if (dryRun) return { type: 'dry_run', tool: toolName, channel, trade_id: tradeId, terms_hash_hex: termsHash };
-      return withScBridge(this.scBridge, async (sc) => {
-        const signed = await signSwapEnvelope(sc, unsigned);
-        await sendEnvelope(sc, channel, signed);
-        return { type: 'terms_accept_posted', channel, trade_id: tradeId, terms_hash_hex: termsHash, envelope: signed };
-      });
+      const store = await this._openReceiptsStore({ required: true });
+      try {
+        return await withScBridge(this.scBridge, async (sc) => {
+          const signed = await signSwapEnvelope(sc, unsigned);
+          await sendEnvelope(sc, channel, signed);
+          const body = isObject(terms.body) ? terms.body : {};
+          const btcSats = Number.isFinite(Number(body.btc_sats)) ? Math.trunc(Number(body.btc_sats)) : null;
+          const usdtAmount = typeof body.usdt_amount === 'string' ? body.usdt_amount : null;
+          const programId = this._programId().toBase58();
+          store.upsertTrade(tradeId, {
+            role: 'taker',
+            swap_channel: channel,
+            maker_peer: String(terms.signer || '').trim().toLowerCase() || null,
+            taker_peer: String(signed.signer || '').trim().toLowerCase() || null,
+            btc_sats: btcSats ?? undefined,
+            usdt_amount: usdtAmount ?? undefined,
+            sol_mint: typeof body.sol_mint === 'string' ? body.sol_mint : undefined,
+            sol_program_id: programId,
+            sol_recipient: typeof body.sol_recipient === 'string' ? body.sol_recipient : undefined,
+            sol_refund: typeof body.sol_refund === 'string' ? body.sol_refund : undefined,
+            sol_refund_after_unix: Number.isFinite(Number(body.sol_refund_after_unix))
+              ? Math.trunc(Number(body.sol_refund_after_unix))
+              : undefined,
+            state: 'accepted',
+            last_error: null,
+          });
+          store.appendEvent(tradeId, 'terms_accept', { channel, terms_hash: termsHash, program_id: programId });
+          return { type: 'terms_accept_posted', channel, trade_id: tradeId, terms_hash_hex: termsHash, envelope: signed };
+        });
+      } finally {
+        store.close();
+      }
     }
 
     // Lightning tools
@@ -987,6 +1162,15 @@ export class ToolExecutor {
     if (toolName === 'intercomswap_ln_listfunds') {
       assertAllowedKeys(args, toolName, []);
       return lnListFunds(this.ln);
+    }
+    if (toolName === 'intercomswap_ln_withdraw') {
+      assertAllowedKeys(args, toolName, ['address', 'amount_sats', 'sat_per_vbyte']);
+      requireApproval(toolName, autoApprove);
+      const address = expectString(args, toolName, 'address', { min: 10, max: 200 });
+      const amountSats = expectInt(args, toolName, 'amount_sats', { min: 1 });
+      const satPerVbyte = expectOptionalInt(args, toolName, 'sat_per_vbyte', { min: 1, max: 10_000 });
+      if (dryRun) return { type: 'dry_run', tool: toolName, address, amount_sats: amountSats, sat_per_vbyte: satPerVbyte };
+      return lnWithdraw(this.ln, { address, amountSats, satPerVbyte });
     }
     if (toolName === 'intercomswap_ln_connect') {
       assertAllowedKeys(args, toolName, ['peer']);
@@ -1052,6 +1236,8 @@ export class ToolExecutor {
       const expirySec = expectOptionalInt(args, toolName, 'expiry_sec', { min: 60, max: 60 * 60 * 24 * 7 });
       if (dryRun) return { type: 'dry_run', tool: toolName, channel, trade_id: tradeId };
 
+      const store = await this._openReceiptsStore({ required: true });
+      try {
       const amountMsat = (BigInt(String(btcSats)) * 1000n).toString();
       const invoice = await lnInvoice(this.ln, { amountMsat, label, description, expirySec });
       const bolt11 = String(invoice?.bolt11 || '').trim();
@@ -1082,9 +1268,26 @@ export class ToolExecutor {
         },
       });
 
-      return withScBridge(this.scBridge, async (sc) => {
+      store.upsertTrade(tradeId, {
+        role: 'maker',
+        swap_channel: channel,
+        btc_sats: btcSats,
+        ln_invoice_bolt11: bolt11,
+        ln_payment_hash_hex: paymentHashHex,
+        state: 'invoice',
+        last_error: null,
+      });
+      store.appendEvent(tradeId, 'ln_invoice', {
+        channel,
+        payment_hash_hex: paymentHashHex,
+        amount_msat: String(amountMsat),
+        expires_at_unix: expiresAtUnix,
+      });
+
+      return await withScBridge(this.scBridge, async (sc) => {
         const signed = await signSwapEnvelope(sc, unsigned);
         await sendEnvelope(sc, channel, signed);
+        store.appendEvent(tradeId, 'ln_invoice_posted', { channel, payment_hash_hex: paymentHashHex });
         const envHandle = secrets && typeof secrets.put === 'function'
           ? secrets.put(signed, { key: 'ln_invoice', channel, trade_id: tradeId, payment_hash_hex: paymentHashHex })
           : null;
@@ -1099,6 +1302,9 @@ export class ToolExecutor {
           envelope: envHandle ? null : signed,
         };
       });
+      } finally {
+        store.close();
+      }
     }
 
     if (toolName === 'intercomswap_swap_sol_escrow_init_and_post') {
@@ -1125,11 +1331,14 @@ export class ToolExecutor {
       const recipient = new PublicKey(normalizeBase58(expectString(args, toolName, 'recipient', { max: 64 }), 'recipient'));
       const refund = new PublicKey(normalizeBase58(expectString(args, toolName, 'refund', { max: 64 }), 'refund'));
       const refundAfterUnix = expectInt(args, toolName, 'refund_after_unix', { min: 1 });
+      assertRefundAfterUnixWindow(refundAfterUnix, toolName);
       const platformFeeBps = expectInt(args, toolName, 'platform_fee_bps', { min: 0, max: 500 });
       const tradeFeeBps = expectInt(args, toolName, 'trade_fee_bps', { min: 0, max: 1000 });
       const tradeFeeCollector = new PublicKey(normalizeBase58(expectString(args, toolName, 'trade_fee_collector', { max: 64 }), 'trade_fee_collector'));
       if (dryRun) return { type: 'dry_run', tool: toolName, channel, trade_id: tradeId, payment_hash_hex: paymentHashHex };
 
+      const store = await this._openReceiptsStore({ required: true });
+      try {
       const signer = this._requireSolanaSigner();
       const programId = this._programId();
       const commitment = this._commitment();
@@ -1158,6 +1367,28 @@ export class ToolExecutor {
 
       const escrowSig = await this._pool().call((connection) => sendAndConfirm(connection, build.tx, commitment), { label: 'swap_sol_escrow_send' });
 
+      store.upsertTrade(tradeId, {
+        role: 'maker',
+        swap_channel: channel,
+        ln_payment_hash_hex: paymentHashHex,
+        sol_mint: mint.toBase58(),
+        sol_program_id: programId.toBase58(),
+        sol_recipient: recipient.toBase58(),
+        sol_refund: refund.toBase58(),
+        sol_escrow_pda: build.escrowPda.toBase58(),
+        sol_vault_ata: build.vault.toBase58(),
+        sol_refund_after_unix: refundAfterUnix,
+        state: 'escrow',
+        last_error: null,
+      });
+      store.appendEvent(tradeId, 'sol_escrow_created', {
+        channel,
+        payment_hash_hex: paymentHashHex,
+        escrow_pda: build.escrowPda.toBase58(),
+        vault_ata: build.vault.toBase58(),
+        tx_sig: escrowSig,
+      });
+
       const unsigned = createUnsignedEnvelope({
         v: 1,
         kind: KIND.SOL_ESCROW_CREATED,
@@ -1176,9 +1407,10 @@ export class ToolExecutor {
         },
       });
 
-      return withScBridge(this.scBridge, async (sc) => {
+      return await withScBridge(this.scBridge, async (sc) => {
         const signed = await signSwapEnvelope(sc, unsigned);
         await sendEnvelope(sc, channel, signed);
+        store.appendEvent(tradeId, 'sol_escrow_posted', { channel, payment_hash_hex: paymentHashHex });
         const envHandle = secrets && typeof secrets.put === 'function'
           ? secrets.put(signed, { key: 'sol_escrow_created', channel, trade_id: tradeId, payment_hash_hex: paymentHashHex })
           : null;
@@ -1195,6 +1427,9 @@ export class ToolExecutor {
           envelope: envHandle ? null : signed,
         };
       });
+      } finally {
+        store.close();
+      }
     }
 
     if (toolName === 'intercomswap_swap_verify_pre_pay') {
@@ -1280,33 +1515,49 @@ export class ToolExecutor {
       const paymentHashHex = normalizeHex32(expectString(args, toolName, 'payment_hash_hex', { min: 64, max: 64 }), 'payment_hash_hex');
       if (dryRun) return { type: 'dry_run', tool: toolName, channel, trade_id: tradeId, payment_hash_hex: paymentHashHex };
 
-      const payRes = await lnPay(this.ln, { bolt11 });
-      const preimageHex = String(payRes?.payment_preimage || '').trim().toLowerCase();
-      if (!/^[0-9a-f]{64}$/.test(preimageHex)) throw new Error(`${toolName}: missing payment_preimage`);
+      const store = await this._openReceiptsStore({ required: true });
+      try {
+        const payRes = await lnPay(this.ln, { bolt11 });
+        const preimageHex = String(payRes?.payment_preimage || '').trim().toLowerCase();
+        if (!/^[0-9a-f]{64}$/.test(preimageHex)) throw new Error(`${toolName}: missing payment_preimage`);
 
-      const unsigned = createUnsignedEnvelope({
-        v: 1,
-        kind: KIND.LN_PAID,
-        tradeId,
-        body: { payment_hash_hex: paymentHashHex },
-      });
+        store.upsertTrade(tradeId, {
+          role: 'taker',
+          swap_channel: channel,
+          ln_payment_hash_hex: paymentHashHex,
+          ln_preimage_hex: preimageHex,
+          state: 'ln_paid',
+          last_error: null,
+        });
+        store.appendEvent(tradeId, 'ln_paid', { channel, payment_hash_hex: paymentHashHex });
 
-      return withScBridge(this.scBridge, async (sc) => {
-        const signed = await signSwapEnvelope(sc, unsigned);
-        await sendEnvelope(sc, channel, signed);
-        const envHandle = secrets && typeof secrets.put === 'function'
-          ? secrets.put(signed, { key: 'ln_paid', channel, trade_id: tradeId, payment_hash_hex: paymentHashHex })
-          : null;
-        return {
-          type: 'ln_paid_posted',
-          channel,
-          trade_id: tradeId,
-          payment_hash_hex: paymentHashHex,
-          preimage_hex: preimageHex,
-          envelope_handle: envHandle,
-          envelope: envHandle ? null : signed,
-        };
-      });
+        const unsigned = createUnsignedEnvelope({
+          v: 1,
+          kind: KIND.LN_PAID,
+          tradeId,
+          body: { payment_hash_hex: paymentHashHex },
+        });
+
+        return await withScBridge(this.scBridge, async (sc) => {
+          const signed = await signSwapEnvelope(sc, unsigned);
+          await sendEnvelope(sc, channel, signed);
+          store.appendEvent(tradeId, 'ln_paid_posted', { channel, payment_hash_hex: paymentHashHex });
+          const envHandle = secrets && typeof secrets.put === 'function'
+            ? secrets.put(signed, { key: 'ln_paid', channel, trade_id: tradeId, payment_hash_hex: paymentHashHex })
+            : null;
+          return {
+            type: 'ln_paid_posted',
+            channel,
+            trade_id: tradeId,
+            payment_hash_hex: paymentHashHex,
+            preimage_hex: preimageHex,
+            envelope_handle: envHandle,
+            envelope: envHandle ? null : signed,
+          };
+        });
+      } finally {
+        store.close();
+      }
     }
 
     if (toolName === 'intercomswap_swap_ln_pay_and_post_from_invoice') {
@@ -1331,33 +1582,49 @@ export class ToolExecutor {
 
       if (dryRun) return { type: 'dry_run', tool: toolName, channel, trade_id: tradeId, payment_hash_hex: paymentHashHex };
 
-      const payRes = await lnPay(this.ln, { bolt11 });
-      const preimageHex = String(payRes?.payment_preimage || '').trim().toLowerCase();
-      if (!/^[0-9a-f]{64}$/.test(preimageHex)) throw new Error(`${toolName}: missing payment_preimage`);
+      const store = await this._openReceiptsStore({ required: true });
+      try {
+        const payRes = await lnPay(this.ln, { bolt11 });
+        const preimageHex = String(payRes?.payment_preimage || '').trim().toLowerCase();
+        if (!/^[0-9a-f]{64}$/.test(preimageHex)) throw new Error(`${toolName}: missing payment_preimage`);
 
-      const unsigned = createUnsignedEnvelope({
-        v: 1,
-        kind: KIND.LN_PAID,
-        tradeId,
-        body: { payment_hash_hex: paymentHashHex },
-      });
+        store.upsertTrade(tradeId, {
+          role: 'taker',
+          swap_channel: channel,
+          ln_payment_hash_hex: paymentHashHex,
+          ln_preimage_hex: preimageHex,
+          state: 'ln_paid',
+          last_error: null,
+        });
+        store.appendEvent(tradeId, 'ln_paid', { channel, payment_hash_hex: paymentHashHex });
 
-      return withScBridge(this.scBridge, async (sc) => {
-        const signed = await signSwapEnvelope(sc, unsigned);
-        await sendEnvelope(sc, channel, signed);
-        const envHandle = secrets && typeof secrets.put === 'function'
-          ? secrets.put(signed, { key: 'ln_paid', channel, trade_id: tradeId, payment_hash_hex: paymentHashHex })
-          : null;
-        return {
-          type: 'ln_paid_posted',
-          channel,
-          trade_id: tradeId,
-          payment_hash_hex: paymentHashHex,
-          preimage_hex: preimageHex,
-          envelope_handle: envHandle,
-          envelope: envHandle ? null : signed,
-        };
-      });
+        const unsigned = createUnsignedEnvelope({
+          v: 1,
+          kind: KIND.LN_PAID,
+          tradeId,
+          body: { payment_hash_hex: paymentHashHex },
+        });
+
+        return await withScBridge(this.scBridge, async (sc) => {
+          const signed = await signSwapEnvelope(sc, unsigned);
+          await sendEnvelope(sc, channel, signed);
+          store.appendEvent(tradeId, 'ln_paid_posted', { channel, payment_hash_hex: paymentHashHex });
+          const envHandle = secrets && typeof secrets.put === 'function'
+            ? secrets.put(signed, { key: 'ln_paid', channel, trade_id: tradeId, payment_hash_hex: paymentHashHex })
+            : null;
+          return {
+            type: 'ln_paid_posted',
+            channel,
+            trade_id: tradeId,
+            payment_hash_hex: paymentHashHex,
+            preimage_hex: preimageHex,
+            envelope_handle: envHandle,
+            envelope: envHandle ? null : signed,
+          };
+        });
+      } finally {
+        store.close();
+      }
     }
 
     if (toolName === 'intercomswap_swap_ln_pay_and_post_verified') {
@@ -1398,72 +1665,88 @@ export class ToolExecutor {
       const paymentHashHex = normalizeHex32(String(invoice.body?.payment_hash_hex || ''), 'payment_hash_hex');
       if (dryRun) return { type: 'dry_run', tool: toolName, channel, trade_id: tradeId, payment_hash_hex: paymentHashHex };
 
-      const commitment = this._commitment();
-      const verifyRes = await this._pool().call(async (connection) => {
-        const res = await verifySwapPrePayOnchain({
-          terms: terms.body,
-          invoiceBody: invoice.body,
-          escrowBody: escrow.body,
-          connection,
-          commitment,
-          now_unix: nowUnix,
+      const store = await this._openReceiptsStore({ required: true });
+      try {
+        const commitment = this._commitment();
+        const verifyRes = await this._pool().call(async (connection) => {
+          const res = await verifySwapPrePayOnchain({
+            terms: terms.body,
+            invoiceBody: invoice.body,
+            escrowBody: escrow.body,
+            connection,
+            commitment,
+            now_unix: nowUnix,
+          });
+          if (!res.ok) return res;
+
+          // Fee guardrails: compare negotiated fee fields to what is actually on-chain.
+          if (res.onchain?.state && isObject(terms.body)) {
+            const t = terms.body;
+            const st = res.onchain.state;
+            if (t.platform_fee_bps !== undefined && t.platform_fee_bps !== null && st.platformFeeBps !== undefined) {
+              if (Number(st.platformFeeBps) !== Number(t.platform_fee_bps)) {
+                return { ok: false, error: 'platform_fee_bps mismatch vs onchain', decoded_invoice: res.decoded_invoice, onchain: res.onchain };
+              }
+            }
+            if (t.trade_fee_bps !== undefined && t.trade_fee_bps !== null && st.tradeFeeBps !== undefined) {
+              if (Number(st.tradeFeeBps) !== Number(t.trade_fee_bps)) {
+                return { ok: false, error: 'trade_fee_bps mismatch vs onchain', decoded_invoice: res.decoded_invoice, onchain: res.onchain };
+              }
+            }
+            if (t.trade_fee_collector && st.tradeFeeCollector?.toBase58) {
+              if (String(st.tradeFeeCollector.toBase58()) !== String(t.trade_fee_collector)) {
+                return { ok: false, error: 'trade_fee_collector mismatch vs onchain', decoded_invoice: res.decoded_invoice, onchain: res.onchain };
+              }
+            }
+          }
+
+          return res;
+        }, { label: 'swap_verify_pre_pay' });
+        if (!verifyRes.ok) throw new Error(`${toolName}: pre-pay verification failed: ${verifyRes.error}`);
+
+        const payRes = await lnPay(this.ln, { bolt11 });
+        const preimageHex = String(payRes?.payment_preimage || '').trim().toLowerCase();
+        if (!/^[0-9a-f]{64}$/.test(preimageHex)) throw new Error(`${toolName}: missing payment_preimage`);
+        const gotHash = computePaymentHashFromPreimage(preimageHex);
+        if (gotHash !== paymentHashHex) throw new Error(`${toolName}: preimage payment_hash mismatch`);
+
+        store.upsertTrade(tradeId, {
+          role: 'taker',
+          swap_channel: channel,
+          ln_payment_hash_hex: paymentHashHex,
+          ln_preimage_hex: preimageHex,
+          state: 'ln_paid',
+          last_error: null,
         });
-        if (!res.ok) return res;
+        store.appendEvent(tradeId, 'ln_paid', { channel, payment_hash_hex: paymentHashHex });
 
-        // Fee guardrails: compare negotiated fee fields to what is actually on-chain.
-        if (res.onchain?.state && isObject(terms.body)) {
-          const t = terms.body;
-          const st = res.onchain.state;
-          if (t.platform_fee_bps !== undefined && t.platform_fee_bps !== null && st.platformFeeBps !== undefined) {
-            if (Number(st.platformFeeBps) !== Number(t.platform_fee_bps)) {
-              return { ok: false, error: 'platform_fee_bps mismatch vs onchain', decoded_invoice: res.decoded_invoice, onchain: res.onchain };
-            }
-          }
-          if (t.trade_fee_bps !== undefined && t.trade_fee_bps !== null && st.tradeFeeBps !== undefined) {
-            if (Number(st.tradeFeeBps) !== Number(t.trade_fee_bps)) {
-              return { ok: false, error: 'trade_fee_bps mismatch vs onchain', decoded_invoice: res.decoded_invoice, onchain: res.onchain };
-            }
-          }
-          if (t.trade_fee_collector && st.tradeFeeCollector?.toBase58) {
-            if (String(st.tradeFeeCollector.toBase58()) !== String(t.trade_fee_collector)) {
-              return { ok: false, error: 'trade_fee_collector mismatch vs onchain', decoded_invoice: res.decoded_invoice, onchain: res.onchain };
-            }
-          }
-        }
+        const unsigned = createUnsignedEnvelope({
+          v: 1,
+          kind: KIND.LN_PAID,
+          tradeId,
+          body: { payment_hash_hex: paymentHashHex },
+        });
 
-        return res;
-      }, { label: 'swap_verify_pre_pay' });
-      if (!verifyRes.ok) throw new Error(`${toolName}: pre-pay verification failed: ${verifyRes.error}`);
-
-      const payRes = await lnPay(this.ln, { bolt11 });
-      const preimageHex = String(payRes?.payment_preimage || '').trim().toLowerCase();
-      if (!/^[0-9a-f]{64}$/.test(preimageHex)) throw new Error(`${toolName}: missing payment_preimage`);
-      const gotHash = computePaymentHashFromPreimage(preimageHex);
-      if (gotHash !== paymentHashHex) throw new Error(`${toolName}: preimage payment_hash mismatch`);
-
-      const unsigned = createUnsignedEnvelope({
-        v: 1,
-        kind: KIND.LN_PAID,
-        tradeId,
-        body: { payment_hash_hex: paymentHashHex },
-      });
-
-      return withScBridge(this.scBridge, async (sc) => {
-        const signed = await signSwapEnvelope(sc, unsigned);
-        await sendEnvelope(sc, channel, signed);
-        const envHandle = secrets && typeof secrets.put === 'function'
-          ? secrets.put(signed, { key: 'ln_paid', channel, trade_id: tradeId, payment_hash_hex: paymentHashHex })
-          : null;
-        return {
-          type: 'ln_paid_posted',
-          channel,
-          trade_id: tradeId,
-          payment_hash_hex: paymentHashHex,
-          preimage_hex: preimageHex,
-          envelope_handle: envHandle,
-          envelope: envHandle ? null : signed,
-        };
-      });
+        return await withScBridge(this.scBridge, async (sc) => {
+          const signed = await signSwapEnvelope(sc, unsigned);
+          await sendEnvelope(sc, channel, signed);
+          store.appendEvent(tradeId, 'ln_paid_posted', { channel, payment_hash_hex: paymentHashHex });
+          const envHandle = secrets && typeof secrets.put === 'function'
+            ? secrets.put(signed, { key: 'ln_paid', channel, trade_id: tradeId, payment_hash_hex: paymentHashHex })
+            : null;
+          return {
+            type: 'ln_paid_posted',
+            channel,
+            trade_id: tradeId,
+            payment_hash_hex: paymentHashHex,
+            preimage_hex: preimageHex,
+            envelope_handle: envHandle,
+            envelope: envHandle ? null : signed,
+          };
+        });
+      } finally {
+        store.close();
+      }
     }
 
     if (toolName === 'intercomswap_swap_sol_claim_and_post') {
@@ -1478,6 +1761,8 @@ export class ToolExecutor {
       const mint = new PublicKey(normalizeBase58(expectString(args, toolName, 'mint', { max: 64 }), 'mint'));
       if (dryRun) return { type: 'dry_run', tool: toolName, channel, trade_id: tradeId, payment_hash_hex: paymentHashHex };
 
+      const store = await this._openReceiptsStore({ required: true });
+      try {
       const signer = this._requireSolanaSigner();
       const programId = this._programId();
       const commitment = this._commitment();
@@ -1511,6 +1796,25 @@ export class ToolExecutor {
 
       const claimSig = await this._pool().call((connection) => sendAndConfirm(connection, claimBuild.tx, commitment), { label: 'swap_sol_claim_send' });
 
+      store.upsertTrade(tradeId, {
+        role: 'taker',
+        swap_channel: channel,
+        ln_payment_hash_hex: paymentHashHex,
+        ln_preimage_hex: preimageHex,
+        sol_mint: mint.toBase58(),
+        sol_program_id: programId.toBase58(),
+        sol_escrow_pda: claimBuild.escrowPda.toBase58(),
+        sol_vault_ata: claimBuild.vault.toBase58(),
+        state: 'claimed',
+        last_error: null,
+      });
+      store.appendEvent(tradeId, 'sol_claimed', {
+        channel,
+        payment_hash_hex: paymentHashHex,
+        escrow_pda: claimBuild.escrowPda.toBase58(),
+        tx_sig: claimSig,
+      });
+
       const unsigned = createUnsignedEnvelope({
         v: 1,
         kind: KIND.SOL_CLAIMED,
@@ -1522,9 +1826,10 @@ export class ToolExecutor {
         },
       });
 
-      return withScBridge(this.scBridge, async (sc) => {
+      return await withScBridge(this.scBridge, async (sc) => {
         const signed = await signSwapEnvelope(sc, unsigned);
         await sendEnvelope(sc, channel, signed);
+        store.appendEvent(tradeId, 'sol_claimed_posted', { channel, payment_hash_hex: paymentHashHex });
         const envHandle = secrets && typeof secrets.put === 'function'
           ? secrets.put(signed, { key: 'sol_claimed', channel, trade_id: tradeId, payment_hash_hex: paymentHashHex })
           : null;
@@ -1539,6 +1844,154 @@ export class ToolExecutor {
           envelope: envHandle ? null : signed,
         };
       });
+      } finally {
+        store.close();
+      }
+    }
+
+    // Solana wallet ops
+    if (toolName === 'intercomswap_sol_signer_pubkey') {
+      assertAllowedKeys(args, toolName, []);
+      const signer = this._requireSolanaSigner();
+      return { type: 'sol_signer', pubkey: signer.publicKey.toBase58() };
+    }
+
+    if (toolName === 'intercomswap_sol_keygen') {
+      assertAllowedKeys(args, toolName, ['out', 'seed_hex', 'overwrite']);
+      requireApproval(toolName, autoApprove);
+      const outArg = expectString(args, toolName, 'out', { min: 1, max: 400 });
+      const outPath = resolveOnchainPath(outArg, { label: 'out' });
+      const seedHex = expectOptionalString(args, toolName, 'seed_hex', { min: 64, max: 64, pattern: /^[0-9a-fA-F]{64}$/ });
+      const overwrite = 'overwrite' in args ? expectBool(args, toolName, 'overwrite') : false;
+      if (dryRun) return { type: 'dry_run', tool: toolName, out: outPath };
+      const kp = generateSolanaKeypair({ seedHex: seedHex ? seedHex.toLowerCase() : null });
+      const written = writeSolanaKeypair(outPath, kp, { overwrite });
+      return { type: 'sol_keygen', out: written, pubkey: kp.publicKey.toBase58() };
+    }
+
+    if (toolName === 'intercomswap_sol_keypair_pubkey') {
+      assertAllowedKeys(args, toolName, ['keypair_path']);
+      const keypairPathArg = expectString(args, toolName, 'keypair_path', { min: 1, max: 400 });
+      const keypairPath = resolveOnchainPath(keypairPathArg, { label: 'keypair_path' });
+      const kp = readSolanaKeypair(keypairPath);
+      return { type: 'sol_keypair_pubkey', keypair_path: keypairPath, pubkey: kp.publicKey.toBase58() };
+    }
+
+    if (toolName === 'intercomswap_sol_airdrop') {
+      assertAllowedKeys(args, toolName, ['pubkey', 'lamports']);
+      requireApproval(toolName, autoApprove);
+      const lamportsStr = normalizeAtomicAmount(expectString(args, toolName, 'lamports', { max: 64 }), 'lamports');
+      const lamportsBig = BigInt(lamportsStr);
+      if (lamportsBig <= 0n) throw new Error(`${toolName}: lamports must be > 0`);
+      if (lamportsBig > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error(`${toolName}: lamports too large for JS number`);
+      const lamports = Number(lamportsBig);
+      const signer = this._requireSolanaSigner();
+      const pubkeyStr = expectOptionalString(args, toolName, 'pubkey', { min: 32, max: 64, pattern: /^[1-9A-HJ-NP-Za-km-z]+$/ });
+      const to = pubkeyStr ? new PublicKey(normalizeBase58(pubkeyStr, 'pubkey')) : signer.publicKey;
+      if (dryRun) return { type: 'dry_run', tool: toolName, pubkey: to.toBase58(), lamports: lamportsStr };
+      const commitment = this._commitment();
+      return this._pool().call(async (connection) => {
+        const sig = await connection.requestAirdrop(to, lamports);
+        await connection.confirmTransaction(sig, commitment);
+        return { type: 'airdrop', pubkey: to.toBase58(), lamports: lamportsStr, tx_sig: sig };
+      }, { label: 'sol_airdrop' });
+    }
+
+    if (toolName === 'intercomswap_sol_transfer_sol') {
+      assertAllowedKeys(args, toolName, ['to', 'lamports']);
+      requireApproval(toolName, autoApprove);
+      const to = new PublicKey(normalizeBase58(expectString(args, toolName, 'to', { max: 64 }), 'to'));
+      const lamportsStr = normalizeAtomicAmount(expectString(args, toolName, 'lamports', { max: 64 }), 'lamports');
+      const lamportsBig = BigInt(lamportsStr);
+      if (lamportsBig <= 0n) throw new Error(`${toolName}: lamports must be > 0`);
+      if (lamportsBig > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error(`${toolName}: lamports too large for JS number`);
+      const lamports = Number(lamportsBig);
+      if (dryRun) return { type: 'dry_run', tool: toolName, to: to.toBase58(), lamports: lamportsStr };
+
+      const signer = this._requireSolanaSigner();
+      const commitment = this._commitment();
+      return this._pool().call(async (connection) => {
+        const ix = SystemProgram.transfer({
+          fromPubkey: signer.publicKey,
+          toPubkey: to,
+          lamports,
+        });
+        const tx = new Transaction().add(ix);
+        tx.feePayer = signer.publicKey;
+        const latest = await connection.getLatestBlockhash(commitment);
+        tx.recentBlockhash = latest.blockhash;
+        tx.sign(signer);
+        const sig = await sendAndConfirm(connection, tx, commitment);
+        return { type: 'sol_transfer', from: signer.publicKey.toBase58(), to: to.toBase58(), lamports: lamportsStr, tx_sig: sig };
+      }, { label: 'sol_transfer_sol' });
+    }
+
+    if (toolName === 'intercomswap_sol_token_transfer') {
+      assertAllowedKeys(args, toolName, ['mint', 'to_owner', 'amount', 'create_ata']);
+      requireApproval(toolName, autoApprove);
+      const mint = new PublicKey(normalizeBase58(expectString(args, toolName, 'mint', { max: 64 }), 'mint'));
+      const toOwner = new PublicKey(normalizeBase58(expectString(args, toolName, 'to_owner', { max: 64 }), 'to_owner'));
+      const amountStr = normalizeAtomicAmount(expectString(args, toolName, 'amount', { max: 64 }), 'amount');
+      const amount = BigInt(amountStr);
+      if (amount <= 0n) throw new Error(`${toolName}: amount must be > 0`);
+      const createAta = 'create_ata' in args ? expectBool(args, toolName, 'create_ata') : true;
+      if (dryRun) return { type: 'dry_run', tool: toolName, mint: mint.toBase58(), to_owner: toOwner.toBase58(), amount: amountStr };
+
+      const signer = this._requireSolanaSigner();
+      const commitment = this._commitment();
+      return this._pool().call(async (connection) => {
+        const fromAta = await getOrCreateAta(connection, signer, signer.publicKey, mint, commitment);
+        const toAta = await getAssociatedTokenAddress(mint, toOwner, true);
+        if (createAta) await getOrCreateAta(connection, signer, toOwner, mint, commitment);
+        else await getAccount(connection, toAta, commitment);
+        const sig = await splTransfer(connection, signer, fromAta, toAta, signer.publicKey, amount, [], { commitment });
+        return {
+          type: 'token_transfer',
+          mint: mint.toBase58(),
+          from_owner: signer.publicKey.toBase58(),
+          to_owner: toOwner.toBase58(),
+          from_ata: fromAta.toBase58(),
+          to_ata: toAta.toBase58(),
+          amount: amountStr,
+          tx_sig: sig,
+        };
+      }, { label: 'sol_token_transfer' });
+    }
+
+    if (toolName === 'intercomswap_sol_mint_create') {
+      assertAllowedKeys(args, toolName, ['decimals']);
+      requireApproval(toolName, autoApprove);
+      const decimals = expectInt(args, toolName, 'decimals', { min: 0, max: 18 });
+      if (dryRun) return { type: 'dry_run', tool: toolName, decimals };
+      const signer = this._requireSolanaSigner();
+      const commitment = this._commitment();
+      return this._pool().call(async (connection) => {
+        const mintKp = Keypair.generate();
+        const mint = await createMint(connection, signer, signer.publicKey, signer.publicKey, decimals, mintKp, { commitment });
+        return { type: 'mint_created', mint: mint.toBase58(), decimals };
+      }, { label: 'sol_mint_create' });
+    }
+
+    if (toolName === 'intercomswap_sol_mint_to') {
+      assertAllowedKeys(args, toolName, ['mint', 'to_owner', 'amount', 'create_ata']);
+      requireApproval(toolName, autoApprove);
+      const mint = new PublicKey(normalizeBase58(expectString(args, toolName, 'mint', { max: 64 }), 'mint'));
+      const toOwner = new PublicKey(normalizeBase58(expectString(args, toolName, 'to_owner', { max: 64 }), 'to_owner'));
+      const amountStr = normalizeAtomicAmount(expectString(args, toolName, 'amount', { max: 64 }), 'amount');
+      const amount = BigInt(amountStr);
+      if (amount <= 0n) throw new Error(`${toolName}: amount must be > 0`);
+      const createAta = 'create_ata' in args ? expectBool(args, toolName, 'create_ata') : true;
+      if (dryRun) return { type: 'dry_run', tool: toolName, mint: mint.toBase58(), to_owner: toOwner.toBase58(), amount: amountStr };
+
+      const signer = this._requireSolanaSigner();
+      const commitment = this._commitment();
+      return this._pool().call(async (connection) => {
+        const toAta = await getAssociatedTokenAddress(mint, toOwner, true);
+        if (createAta) await getOrCreateAta(connection, signer, toOwner, mint, commitment);
+        else await getAccount(connection, toAta, commitment);
+        const sig = await mintTo(connection, signer, mint, toAta, signer.publicKey, amount, [], { commitment });
+        return { type: 'mint_to', mint: mint.toBase58(), to_owner: toOwner.toBase58(), to_ata: toAta.toBase58(), amount: amountStr, tx_sig: sig };
+      }, { label: 'sol_mint_to' });
     }
 
     // Solana (read-only)
@@ -1814,6 +2267,7 @@ export class ToolExecutor {
       const recipient = new PublicKey(normalizeBase58(expectString(args, toolName, 'recipient', { max: 64 }), 'recipient'));
       const refund = new PublicKey(normalizeBase58(expectString(args, toolName, 'refund', { max: 64 }), 'refund'));
       const refundAfterUnix = expectInt(args, toolName, 'refund_after_unix', { min: 1 });
+      assertRefundAfterUnixWindow(refundAfterUnix, toolName);
       const platformFeeBps = expectInt(args, toolName, 'platform_fee_bps', { min: 0, max: 500 });
       const tradeFeeBps = expectInt(args, toolName, 'trade_fee_bps', { min: 0, max: 1000 });
       const tradeFeeCollector = new PublicKey(normalizeBase58(expectString(args, toolName, 'trade_fee_collector', { max: 64 }), 'trade_fee_collector'));
@@ -1941,21 +2395,176 @@ export class ToolExecutor {
       }, { label: 'sol_escrow_refund' });
     }
 
-    // Receipts (local-only)
-    if (toolName === 'intercomswap_receipts_list' || toolName === 'intercomswap_receipts_show') {
+    // Receipts + recovery (local-only)
+    if (
+      toolName === 'intercomswap_receipts_list' ||
+      toolName === 'intercomswap_receipts_show' ||
+      toolName === 'intercomswap_receipts_list_open_claims' ||
+      toolName === 'intercomswap_receipts_list_open_refunds' ||
+      toolName === 'intercomswap_swaprecover_claim' ||
+      toolName === 'intercomswap_swaprecover_refund'
+    ) {
       const { TradeReceiptsStore } = await import('../receipts/store.js');
       const dbPath = String(this.receipts?.dbPath || '').trim();
       if (!dbPath) throw new Error('receipts db not configured (set receipts.db in prompt setup JSON)');
       const store = TradeReceiptsStore.open({ dbPath });
+      try {
+
+      const pickTrade = ({ tradeId, paymentHashHex }) => {
+        if (tradeId) {
+          const t = store.getTrade(tradeId);
+          if (!t) throw new Error(`Trade not found: trade_id=${tradeId}`);
+          return t;
+        }
+        if (paymentHashHex) {
+          const t = store.getTradeByPaymentHash(paymentHashHex);
+          if (!t) throw new Error(`Trade not found for payment_hash=${paymentHashHex}`);
+          return t;
+        }
+        throw new Error('Missing trade_id or payment_hash_hex');
+      };
 
       if (toolName === 'intercomswap_receipts_list') {
-        assertAllowedKeys(args, toolName, []);
-        return store.listTrades({ limit: 50 });
+        assertAllowedKeys(args, toolName, ['limit', 'offset']);
+        const limit = expectOptionalInt(args, toolName, 'limit', { min: 1, max: 1000 }) ?? 50;
+        const offset = expectOptionalInt(args, toolName, 'offset', { min: 0, max: 1_000_000 }) ?? 0;
+        return store.listTradesPaged({ limit, offset });
       }
 
-      assertAllowedKeys(args, toolName, ['trade_id']);
-      const tradeId = expectString(args, toolName, 'trade_id', { min: 1, max: 128 });
-      return store.getTrade(tradeId);
+      if (toolName === 'intercomswap_receipts_list_open_claims') {
+        assertAllowedKeys(args, toolName, ['limit', 'offset']);
+        const limit = expectOptionalInt(args, toolName, 'limit', { min: 1, max: 1000 }) ?? 50;
+        const offset = expectOptionalInt(args, toolName, 'offset', { min: 0, max: 1_000_000 }) ?? 0;
+        return store.listOpenClaims({ limit, offset, state: 'ln_paid' });
+      }
+
+      if (toolName === 'intercomswap_receipts_list_open_refunds') {
+        assertAllowedKeys(args, toolName, ['now_unix', 'limit', 'offset']);
+        const nowUnix = expectOptionalInt(args, toolName, 'now_unix', { min: 1 }) ?? null;
+        const limit = expectOptionalInt(args, toolName, 'limit', { min: 1, max: 1000 }) ?? 50;
+        const offset = expectOptionalInt(args, toolName, 'offset', { min: 0, max: 1_000_000 }) ?? 0;
+        return store.listOpenRefunds({ nowUnix, limit, offset, state: 'escrow' });
+      }
+
+      if (toolName === 'intercomswap_receipts_show') {
+        assertAllowedKeys(args, toolName, ['trade_id']);
+        const tradeId = expectString(args, toolName, 'trade_id', { min: 1, max: 128 });
+        return store.getTrade(tradeId);
+      }
+
+      if (toolName === 'intercomswap_swaprecover_claim') {
+        assertAllowedKeys(args, toolName, ['trade_id', 'payment_hash_hex']);
+        requireApproval(toolName, autoApprove);
+        const tradeId = expectOptionalString(args, toolName, 'trade_id', { min: 1, max: 128 });
+        const paymentHashHex = expectOptionalString(args, toolName, 'payment_hash_hex', { min: 64, max: 64, pattern: /^[0-9a-fA-F]{64}$/ });
+        const trade = pickTrade({ tradeId, paymentHashHex: paymentHashHex ? normalizeHex32(paymentHashHex, 'payment_hash_hex') : null });
+
+        const hash = normalizeHex32(String(trade.ln_payment_hash_hex || ''), 'ln_payment_hash_hex');
+        const preimageHex = normalizeHex32(String(trade.ln_preimage_hex || ''), 'ln_preimage_hex');
+        const mintStr = String(trade.sol_mint || '').trim();
+        const programStr = String(trade.sol_program_id || '').trim();
+        if (!mintStr) throw new Error('Trade missing sol_mint (cannot claim)');
+        if (!programStr) throw new Error('Trade missing sol_program_id (cannot claim)');
+
+        const signer = this._requireSolanaSigner();
+        const signerPk = signer.publicKey.toBase58();
+        if (String(trade.sol_recipient || '').trim() && String(trade.sol_recipient).trim() !== signerPk) {
+          throw new Error(`Signer mismatch (need sol_recipient=${trade.sol_recipient})`);
+        }
+
+        if (dryRun) return { type: 'dry_run', tool: toolName, trade_id: trade.trade_id, payment_hash_hex: hash };
+
+        const mint = new PublicKey(mintStr);
+        const programId = new PublicKey(programStr);
+        const commitment = this._commitment();
+        const { computeUnitLimit, computeUnitPriceMicroLamports } = this._computeBudget();
+
+        const build = await this._pool().call(async (connection) => {
+          const onchain = await getEscrowState(connection, hash, programId, commitment);
+          if (!onchain) throw new Error('Escrow not found on chain');
+          if (!onchain.recipient.equals(signer.publicKey)) {
+            throw new Error(`Recipient mismatch (escrow.recipient=${onchain.recipient.toBase58()})`);
+          }
+          const tradeFeeCollector = onchain.tradeFeeCollector ?? onchain.feeCollector;
+          if (!tradeFeeCollector) throw new Error('Escrow missing tradeFeeCollector');
+          const recipientAta = await getOrCreateAta(connection, signer, signer.publicKey, mint, commitment);
+          return claimEscrowTx({
+            connection,
+            recipient: signer,
+            recipientTokenAccount: recipientAta,
+            mint,
+            paymentHashHex: hash,
+            preimageHex,
+            tradeFeeCollector,
+            computeUnitLimit,
+            computeUnitPriceMicroLamports,
+            programId,
+          });
+        }, { label: 'swaprecover_claim_build' });
+
+        const sig = await this._pool().call((connection) => sendAndConfirm(connection, build.tx, commitment), { label: 'swaprecover_claim_send' });
+
+        store.upsertTrade(trade.trade_id, { state: 'claimed' });
+        store.appendEvent(trade.trade_id, 'recovery_claim', { tx_sig: sig, payment_hash_hex: hash });
+        return { type: 'recovered_claimed', trade_id: trade.trade_id, payment_hash_hex: hash, tx_sig: sig, escrow_pda: build.escrowPda.toBase58(), vault_ata: build.vault.toBase58() };
+      }
+
+      if (toolName === 'intercomswap_swaprecover_refund') {
+        assertAllowedKeys(args, toolName, ['trade_id', 'payment_hash_hex']);
+        requireApproval(toolName, autoApprove);
+        const tradeId = expectOptionalString(args, toolName, 'trade_id', { min: 1, max: 128 });
+        const paymentHashHex = expectOptionalString(args, toolName, 'payment_hash_hex', { min: 64, max: 64, pattern: /^[0-9a-fA-F]{64}$/ });
+        const trade = pickTrade({ tradeId, paymentHashHex: paymentHashHex ? normalizeHex32(paymentHashHex, 'payment_hash_hex') : null });
+
+        const hash = normalizeHex32(String(trade.ln_payment_hash_hex || ''), 'ln_payment_hash_hex');
+        const mintStr = String(trade.sol_mint || '').trim();
+        const programStr = String(trade.sol_program_id || '').trim();
+        if (!mintStr) throw new Error('Trade missing sol_mint (cannot refund)');
+        if (!programStr) throw new Error('Trade missing sol_program_id (cannot refund)');
+
+        const signer = this._requireSolanaSigner();
+        const signerPk = signer.publicKey.toBase58();
+        if (String(trade.sol_refund || '').trim() && String(trade.sol_refund).trim() !== signerPk) {
+          throw new Error(`Signer mismatch (need sol_refund=${trade.sol_refund})`);
+        }
+
+        if (dryRun) return { type: 'dry_run', tool: toolName, trade_id: trade.trade_id, payment_hash_hex: hash };
+
+        const mint = new PublicKey(mintStr);
+        const programId = new PublicKey(programStr);
+        const commitment = this._commitment();
+        const { computeUnitLimit, computeUnitPriceMicroLamports } = this._computeBudget();
+
+        const build = await this._pool().call(async (connection) => {
+          const onchain = await getEscrowState(connection, hash, programId, commitment);
+          if (!onchain) throw new Error('Escrow not found on chain');
+          if (!onchain.refund.equals(signer.publicKey)) {
+            throw new Error(`Refund mismatch (escrow.refund=${onchain.refund.toBase58()})`);
+          }
+          const refundAta = await getOrCreateAta(connection, signer, signer.publicKey, mint, commitment);
+          return refundEscrowTx({
+            connection,
+            refund: signer,
+            refundTokenAccount: refundAta,
+            mint,
+            paymentHashHex: hash,
+            computeUnitLimit,
+            computeUnitPriceMicroLamports,
+            programId,
+          });
+        }, { label: 'swaprecover_refund_build' });
+
+        const sig = await this._pool().call((connection) => sendAndConfirm(connection, build.tx, commitment), { label: 'swaprecover_refund_send' });
+
+        store.upsertTrade(trade.trade_id, { state: 'refunded' });
+        store.appendEvent(trade.trade_id, 'recovery_refund', { tx_sig: sig, payment_hash_hex: hash });
+        return { type: 'recovered_refunded', trade_id: trade.trade_id, payment_hash_hex: hash, tx_sig: sig, escrow_pda: build.escrowPda.toBase58(), vault_ata: build.vault.toBase58() };
+      }
+      } finally {
+        try {
+          store.close();
+        } catch (_e) {}
+      }
     }
 
     throw new Error(`Unknown tool: ${toolName}`);

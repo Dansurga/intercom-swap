@@ -158,7 +158,13 @@ export class TradeReceiptsStore {
 
     this._stmtGetTrade = db.prepare('SELECT * FROM trades WHERE trade_id = ?');
     this._stmtGetTradeByPaymentHash = db.prepare('SELECT * FROM trades WHERE ln_payment_hash_hex = ?');
-    this._stmtListTrades = db.prepare('SELECT * FROM trades ORDER BY updated_at DESC LIMIT ?');
+    this._stmtListTrades = db.prepare('SELECT * FROM trades ORDER BY updated_at DESC LIMIT ? OFFSET ?');
+    this._stmtListOpenClaims = db.prepare(
+      'SELECT * FROM trades WHERE state = ? AND ln_preimage_hex IS NOT NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?'
+    );
+    this._stmtListOpenRefunds = db.prepare(
+      'SELECT * FROM trades WHERE state = ? AND sol_refund_after_unix IS NOT NULL AND sol_refund_after_unix <= ? ORDER BY updated_at DESC LIMIT ? OFFSET ?'
+    );
 
     this._stmtInsertEvent = db.prepare(
       'INSERT INTO events(trade_id, ts, kind, payload_json) VALUES(?, ?, ?, ?)'
@@ -284,7 +290,28 @@ export class TradeReceiptsStore {
 
   listTrades({ limit = 50 } = {}) {
     const n = Number.isFinite(limit) ? Math.max(1, Math.min(1000, Math.trunc(limit))) : 50;
-    return this._stmtListTrades.all(n).map(mapRow);
+    return this._stmtListTrades.all(n, 0).map(mapRow);
+  }
+
+  listTradesPaged({ limit = 50, offset = 0 } = {}) {
+    const n = Number.isFinite(limit) ? Math.max(1, Math.min(1000, Math.trunc(limit))) : 50;
+    const off = Number.isFinite(offset) ? Math.max(0, Math.trunc(offset)) : 0;
+    return this._stmtListTrades.all(n, off).map(mapRow);
+  }
+
+  listOpenClaims({ limit = 50, offset = 0, state = 'ln_paid' } = {}) {
+    const n = Number.isFinite(limit) ? Math.max(1, Math.min(1000, Math.trunc(limit))) : 50;
+    const off = Number.isFinite(offset) ? Math.max(0, Math.trunc(offset)) : 0;
+    const st = String(state || '').trim() || 'ln_paid';
+    return this._stmtListOpenClaims.all(st, n, off).map(mapRow);
+  }
+
+  listOpenRefunds({ nowUnix = null, limit = 50, offset = 0, state = 'escrow' } = {}) {
+    const n = Number.isFinite(limit) ? Math.max(1, Math.min(1000, Math.trunc(limit))) : 50;
+    const off = Number.isFinite(offset) ? Math.max(0, Math.trunc(offset)) : 0;
+    const st = String(state || '').trim() || 'escrow';
+    const now = nowUnix === null || nowUnix === undefined ? Math.floor(Date.now() / 1000) : coerceInt(nowUnix);
+    return this._stmtListOpenRefunds.all(st, now, n, off).map(mapRow);
   }
 
   upsertTrade(tradeId, patch = {}) {

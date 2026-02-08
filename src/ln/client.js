@@ -326,3 +326,30 @@ export async function lnPreimageGet(opts, { paymentHashHex }) {
   }
   return { payment_hash_hex: st.payment_hash_hex, preimage_hex: preimageHex, raw: st.raw };
 }
+
+export async function lnWithdraw(opts, { address, amountSats, satPerVbyte = null }) {
+  const addr = String(address || '').trim();
+  if (!addr) throw new Error('Missing address');
+  const amt = Number(amountSats);
+  if (!Number.isFinite(amt) || !Number.isInteger(amt) || amt <= 0) throw new Error('Invalid amountSats');
+
+  const feeRate = satPerVbyte === null || satPerVbyte === undefined ? null : Number(satPerVbyte);
+  if (feeRate !== null && (!Number.isFinite(feeRate) || !Number.isInteger(feeRate) || feeRate < 1 || feeRate > 10_000)) {
+    throw new Error('Invalid satPerVbyte (expected integer 1..10000)');
+  }
+
+  if (opts.impl === 'lnd') {
+    const args = ['sendcoins', '--addr', addr, '--amount', String(amt)];
+    if (feeRate !== null) args.push('--sat_per_vbyte', String(feeRate));
+    return lnLndCli({ ...opts, args });
+  }
+
+  // CLN withdraw feerate can be provided as a string; we support sat/vbyte by converting
+  // to sat/kw ("perkw") since CLN accepts <n>perkw.
+  const args = ['withdraw', addr, String(amt)];
+  if (feeRate !== null) {
+    const perkw = Math.max(1, Math.trunc(feeRate * 250));
+    args.push(`${perkw}perkw`);
+  }
+  return lnClnCli({ ...opts, args });
+}

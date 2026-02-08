@@ -244,6 +244,71 @@ export const INTERCOMSWAP_TOOLS = [
     required: ['swap_invite_envelope'],
   }),
 
+  // RFQ bot manager (local processes; does not stop the peer).
+  tool('intercomswap_rfqbot_status', 'List local RFQ bot instances started via prompt tools (reads onchain/rfq-bots).', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      name: { type: 'string', minLength: 1, maxLength: 64, description: 'Optional bot instance id.' },
+    },
+    required: [],
+  }),
+  tool('intercomswap_rfqbot_start_maker', 'Start a maker RFQ bot instance (detached background process).', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      name: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9._-]+$' },
+      store: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9._-]+$' },
+      sc_port: { type: 'integer', minimum: 1, maximum: 65535 },
+      receipts_db: { type: 'string', minLength: 1, maxLength: 400, description: 'Optional receipts db path (must be under onchain/).' },
+      argv: {
+        type: 'array',
+        minItems: 0,
+        maxItems: 80,
+        items: { type: 'string', minLength: 1, maxLength: 200 },
+        description: 'Optional extra args passed to scripts/rfq-maker.mjs (no shell).',
+      },
+    },
+    required: ['name', 'store', 'sc_port'],
+  }),
+  tool('intercomswap_rfqbot_start_taker', 'Start a taker RFQ bot instance (detached background process).', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      name: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9._-]+$' },
+      store: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9._-]+$' },
+      sc_port: { type: 'integer', minimum: 1, maximum: 65535 },
+      receipts_db: { type: 'string', minLength: 1, maxLength: 400, description: 'Optional receipts db path (must be under onchain/).' },
+      argv: {
+        type: 'array',
+        minItems: 0,
+        maxItems: 80,
+        items: { type: 'string', minLength: 1, maxLength: 200 },
+        description: 'Optional extra args passed to scripts/rfq-taker.mjs (no shell).',
+      },
+    },
+    required: ['name', 'store', 'sc_port'],
+  }),
+  tool('intercomswap_rfqbot_stop', 'Stop an RFQ bot instance (by instance name).', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      name: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9._-]+$' },
+      signal: { type: 'string', minLength: 3, maxLength: 10, description: 'SIGTERM|SIGINT|SIGKILL (default SIGTERM)' },
+      wait_ms: { type: 'integer', minimum: 0, maximum: 120000, description: 'Wait time before SIGKILL fallback (default 2000ms).' },
+    },
+    required: ['name'],
+  }),
+  tool('intercomswap_rfqbot_restart', 'Restart an RFQ bot instance (stop then start using last config).', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      name: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9._-]+$' },
+      wait_ms: { type: 'integer', minimum: 0, maximum: 120000, description: 'Wait time before SIGKILL fallback (default 2000ms).' },
+    },
+    required: ['name'],
+  }),
+
   tool('intercomswap_terms_post', 'Maker: post signed TERMS envelope inside swap:<id>.', {
     type: 'object',
     additionalProperties: false,
@@ -313,6 +378,16 @@ export const INTERCOMSWAP_TOOLS = [
   tool('intercomswap_ln_info', 'Get Lightning node info (impl/backend configured locally).', emptyParams),
   tool('intercomswap_ln_newaddr', 'Get a new on-chain BTC address from the LN node wallet.', emptyParams),
   tool('intercomswap_ln_listfunds', 'Get on-chain + channel balances.', emptyParams),
+  tool('intercomswap_ln_withdraw', 'Send on-chain BTC from the LN node wallet to a BTC address.', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      address: { type: 'string', minLength: 10, maxLength: 200, description: 'Destination BTC address (bech32 recommended).' },
+      amount_sats: { type: 'integer', minimum: 1, maximum: 21_000_000 * 100_000_000, description: 'Satoshis to send.' },
+      sat_per_vbyte: { type: 'integer', minimum: 1, maximum: 10_000, description: 'Optional fee rate for on-chain send.' },
+    },
+    required: ['address', 'amount_sats'],
+  }),
   tool('intercomswap_ln_connect', 'Connect to a Lightning peer (nodeid@host:port).', {
     type: 'object',
     additionalProperties: false,
@@ -530,6 +605,75 @@ export const INTERCOMSWAP_TOOLS = [
     required: ['channel', 'trade_id', 'preimage_hex', 'mint'],
   }),
 
+  // Solana wallet operator actions (local keys only; signer configured in prompt setup JSON unless otherwise noted).
+  tool('intercomswap_sol_signer_pubkey', 'Get the configured Solana signer pubkey for this promptd instance.', emptyParams),
+  tool('intercomswap_sol_keygen', 'Generate a new Solana keypair JSON file under onchain/ (gitignored).', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      out: { type: 'string', minLength: 1, maxLength: 400, description: 'Output path (must be under onchain/).' },
+      seed_hex: { type: 'string', minLength: 64, maxLength: 64, pattern: '^[0-9a-fA-F]{64}$', description: 'Optional 32-byte hex seed for deterministic keygen.' },
+      overwrite: { type: 'boolean', description: 'Allow overwriting an existing file (default false).' },
+    },
+    required: ['out'],
+  }),
+  tool('intercomswap_sol_keypair_pubkey', 'Get the pubkey for a Solana keypair JSON file (path must be under onchain/).', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      keypair_path: { type: 'string', minLength: 1, maxLength: 400, description: 'Keypair JSON path (must be under onchain/).' },
+    },
+    required: ['keypair_path'],
+  }),
+  tool('intercomswap_sol_airdrop', 'Request an airdrop (local validator/test only; mainnet will fail).', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      pubkey: { ...base58Param, description: 'Optional; defaults to signer pubkey.' },
+      lamports: atomicAmountParam,
+    },
+    required: ['lamports'],
+  }),
+  tool('intercomswap_sol_transfer_sol', 'Transfer SOL from the configured signer to a recipient pubkey.', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      to: base58Param,
+      lamports: atomicAmountParam,
+    },
+    required: ['to', 'lamports'],
+  }),
+  tool('intercomswap_sol_token_transfer', 'Transfer an SPL token (ATA->ATA) from the signer to a recipient owner pubkey.', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      mint: base58Param,
+      to_owner: base58Param,
+      amount: atomicAmountParam,
+      create_ata: { type: 'boolean', description: 'Create recipient ATA if missing (default true).' },
+    },
+    required: ['mint', 'to_owner', 'amount'],
+  }),
+  tool('intercomswap_sol_mint_create', 'Create a new SPL mint where the signer is mint+freeze authority (test/dev convenience).', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      decimals: { type: 'integer', minimum: 0, maximum: 18 },
+    },
+    required: ['decimals'],
+  }),
+  tool('intercomswap_sol_mint_to', 'Mint SPL tokens from a signer-controlled mint to a recipient owner pubkey (test/dev convenience).', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      mint: base58Param,
+      to_owner: base58Param,
+      amount: atomicAmountParam,
+      create_ata: { type: 'boolean', description: 'Create recipient ATA if missing (default true).' },
+    },
+    required: ['mint', 'to_owner', 'amount'],
+  }),
+
   // Solana escrow / program ops (executor must use configured RPC + keypairs).
   tool('intercomswap_sol_balance', 'Get SOL balance for a pubkey.', {
     type: 'object',
@@ -668,11 +812,60 @@ export const INTERCOMSWAP_TOOLS = [
   ),
 
   // Receipts / recovery (local-only, deterministic).
-  tool('intercomswap_receipts_list', 'List local trade receipts (sqlite).', emptyParams),
+  tool('intercomswap_receipts_list', 'List local trade receipts (sqlite).', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      limit: { type: 'integer', minimum: 1, maximum: 1000 },
+      offset: { type: 'integer', minimum: 0, maximum: 1_000_000 },
+    },
+    required: [],
+  }),
   tool('intercomswap_receipts_show', 'Show a local receipt by trade_id.', {
     type: 'object',
     additionalProperties: false,
     properties: { trade_id: { type: 'string', minLength: 1, maxLength: 128 } },
     required: ['trade_id'],
+  }),
+  tool('intercomswap_receipts_list_open_claims', 'List trades that look claimable (state=ln_paid and preimage present).', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      limit: { type: 'integer', minimum: 1, maximum: 1000 },
+      offset: { type: 'integer', minimum: 0, maximum: 1_000_000 },
+    },
+    required: [],
+  }),
+  tool(
+    'intercomswap_receipts_list_open_refunds',
+    'List trades that look refundable (state=escrow and refund_after <= now). Uses local receipt data only.',
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        now_unix: { ...unixSecParam, description: 'Optional unix seconds; defaults to now.' },
+        limit: { type: 'integer', minimum: 1, maximum: 1000 },
+        offset: { type: 'integer', minimum: 0, maximum: 1_000_000 },
+      },
+      required: [],
+    }
+  ),
+  tool('intercomswap_swaprecover_claim', 'Recover: claim a stuck Solana escrow using local receipts + signer.', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      trade_id: { type: 'string', minLength: 1, maxLength: 128 },
+      payment_hash_hex: hex32Param,
+    },
+    required: [],
+  }),
+  tool('intercomswap_swaprecover_refund', 'Recover: refund an expired Solana escrow using local receipts + signer.', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      trade_id: { type: 'string', minLength: 1, maxLength: 128 },
+      payment_hash_hex: hex32Param,
+    },
+    required: [],
   }),
 ];
