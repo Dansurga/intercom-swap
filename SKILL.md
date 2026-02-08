@@ -238,6 +238,18 @@ This repo includes **Collin**, a local-first control center UI (prompting is onl
 - Source: `ui/collin/`
 - Served by: `promptd` (same origin as `/v1/*`, avoids CORS issues)
 
+Important: Collin’s live sidechannel stream (`/v1/sc/stream`) requires a **running peer with SC-Bridge enabled**.
+Start a peer first (or start it from Collin via the `peer_*` tools once `promptd` is running).
+
+Examples:
+```bash
+# Background peer (recommended; doesn’t require keeping a terminal open)
+scripts/peermgr.sh start --name swap-maker-peer --store swap-maker --sc-port 49222 --sidechannels 0000intercomswapbtcusdt
+
+# Foreground peer (dev convenience)
+scripts/run-swap-maker.sh swap-maker 49222 0000intercomswapbtcusdt
+```
+
 Build the UI:
 ```bash
 cd ui/collin
