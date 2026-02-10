@@ -178,8 +178,8 @@ function App() {
     const chan = scFilter.channel.trim().toLowerCase();
     const kind = scFilter.kind.trim().toLowerCase();
     return scEvents.filter((e) => {
-      const c = String(e.channel || '').toLowerCase();
-      const k = String(e.kind || '').toLowerCase();
+      const c = String((e as any)?.channel || (e as any)?.message?.channel || '').toLowerCase();
+      const k = String((e as any)?.kind || (e as any)?.message?.kind || '').toLowerCase();
       if (chan && !c.includes(chan)) return false;
       if (kind && !k.includes(kind)) return false;
       return true;
@@ -206,24 +206,6 @@ function App() {
     }
   };
 
-  const rfqEvents = useMemo(() => {
-    return filteredScEvents.filter((e) => {
-      if (String(e.kind || '') !== 'swap.rfq') return false;
-      const signer = evtSignerHex(e);
-      if (localPeerPubkeyHex && signer && signer === localPeerPubkeyHex) return false;
-      return true;
-    });
-  }, [filteredScEvents, localPeerPubkeyHex]);
-
-  const offerEvents = useMemo(() => {
-    return filteredScEvents.filter((e) => {
-      if (String(e.kind || '') !== 'swap.svc_announce') return false;
-      const signer = evtSignerHex(e);
-      if (localPeerPubkeyHex && signer && signer === localPeerPubkeyHex) return false;
-      return true;
-    });
-  }, [filteredScEvents, localPeerPubkeyHex]);
-
   function finalEventContentJson(e: any) {
     // promptd emits {type:"final", content_json: {...}} (not wrapped).
     if (!e || typeof e !== 'object') return null;
@@ -239,6 +221,78 @@ function App() {
     }
     return null;
   }
+
+  const localPostedSigKeys = useMemo(() => {
+    // Best-effort local outbox detection. Used to keep inboxes clean even before sc_info loads.
+    const set = new Set<string>();
+    const add = (env: any) => {
+      try {
+        const signer = String(env?.signer || '').trim().toLowerCase();
+        const sig = String(env?.sig || '').trim().toLowerCase();
+        if (signer && sig) set.add(`${signer}:${sig}`);
+      } catch (_e) {}
+    };
+
+    // Prompt tool results (works even if the SC feed is down).
+    for (const e of promptEvents) {
+      try {
+        const cj = finalEventContentJson(e);
+        if (!cj || typeof cj !== 'object') continue;
+        const t = String((cj as any).type || '').trim();
+        if (t !== 'offer_posted' && t !== 'rfq_posted') continue;
+        add((cj as any).envelope);
+      } catch (_e) {}
+    }
+
+    // Also include outbound network echoes when we know the local signer.
+    if (localPeerPubkeyHex) {
+      for (const e of scEvents) {
+        try {
+          const k = String((e as any)?.kind || '');
+          if (k !== 'swap.rfq' && k !== 'swap.svc_announce') continue;
+          const signer = evtSignerHex(e);
+          if (!signer || signer !== localPeerPubkeyHex) continue;
+          add((e as any)?.message);
+        } catch (_e) {}
+      }
+    }
+
+    return set;
+  }, [promptEvents, scEvents, localPeerPubkeyHex]);
+
+  const rfqEvents = useMemo(() => {
+    return filteredScEvents.filter((e) => {
+      const k = String((e as any)?.kind || (e as any)?.message?.kind || '');
+      if (k !== 'swap.rfq') return false;
+      const signer = evtSignerHex(e);
+      if (localPeerPubkeyHex && signer && signer === localPeerPubkeyHex) return false;
+      try {
+        const env = (e as any)?.message;
+        const s = String(env?.signer || '').trim().toLowerCase();
+        const sig = String(env?.sig || '').trim().toLowerCase();
+        const key = s && sig ? `${s}:${sig}` : '';
+        if (key && localPostedSigKeys.has(key)) return false;
+      } catch (_e) {}
+      return true;
+    });
+  }, [filteredScEvents, localPeerPubkeyHex, localPostedSigKeys]);
+
+  const offerEvents = useMemo(() => {
+    return filteredScEvents.filter((e) => {
+      const k = String((e as any)?.kind || (e as any)?.message?.kind || '');
+      if (k !== 'swap.svc_announce') return false;
+      const signer = evtSignerHex(e);
+      if (localPeerPubkeyHex && signer && signer === localPeerPubkeyHex) return false;
+      try {
+        const env = (e as any)?.message;
+        const s = String(env?.signer || '').trim().toLowerCase();
+        const sig = String(env?.sig || '').trim().toLowerCase();
+        const key = s && sig ? `${s}:${sig}` : '';
+        if (key && localPostedSigKeys.has(key)) return false;
+      } catch (_e) {}
+      return true;
+    });
+  }, [filteredScEvents, localPeerPubkeyHex, localPostedSigKeys]);
 
   const myOfferPosts = useMemo(() => {
     // Offer announcements we posted locally.
@@ -2164,7 +2218,7 @@ function App() {
 	                </div>
 	              )}
 
-              {!stackGate.ok ? (
+              {!stackGate.ok && stackAnyRunning ? (
                 <div className="row">
                   {!scConnected ? (
                     <button className="btn primary" onClick={startScStream} disabled={!health?.ok || stackOpBusy}>
@@ -2315,6 +2369,7 @@ function App() {
                   placeholder="filter kind (contains)"
                 />
               </div>
+              <div className="muted small">Filters are substring matches. Example: kind=<span className="mono">swap.rfq</span>.</div>
               <VirtualList
                 listRef={scListRef}
                 items={filteredScEvents}
@@ -2436,6 +2491,7 @@ function App() {
                   onChange={(e) => setOfferName(e.target.value)}
                   placeholder="maker:alice (auto if empty)"
                 />
+                <div className="muted small">Display-only label. Not unique. Auto-generated if empty.</div>
               </div>
 
               <div className="field">
@@ -3263,6 +3319,7 @@ function App() {
 		                  onClick={() => {
 		                    if (lnChannelCount > 0 && !preflight?.ln_listfunds_error) {
 		                      setSelected({ type: 'ln_listfunds', evt: preflight?.ln_listfunds || null });
+		                      pushToast('info', 'Lightning channel already exists (opened details).', { ttlMs: 4500 });
 		                      return;
 		                    }
 		                    void ensureLnRegtestChannel();
