@@ -192,6 +192,10 @@ This repo also provides long-running RFQ “agent bots” that sit in an RFQ cha
   - **Permission note:** if your agent/runtime cannot execute `docker` commands (or cannot access the Docker daemon), stop and ask the human operator to start Docker and run the needed commands on your behalf (then paste the output back) before proceeding.
 - LN liquidity prerequisites:
   - Swaps will fail if the payer has no outbound liquidity, or the invoice receiver has no inbound liquidity.
+  - Liquidity guardrail modes (used by RFQ/accept flows and Collin):
+    - `single_channel` (default): one active channel must satisfy the full required sats for that line.
+    - `aggregate`: sum of active channels may satisfy the required sats (best-effort; real route can still fail).
+    - Use `single_channel` when you want stricter fillability guarantees; use `aggregate` when you intentionally distribute liquidity across many channels.
   - Practical first-trade rule: if a node opens its own first channel, it usually starts with near-100% local/outbound and ~0 remote/inbound.
     - Result: that node can usually **sell BTC first** (pay LN), but cannot immediately **sell USDT first** (receive LN) until inbound is bootstrapped.
     - Inbound bootstrap options:
@@ -463,6 +467,9 @@ A→Z operating flow:
      3) Re-check with `intercomswap_ln_listchannels` until remote/inbound on A is sufficient for intended Sell USDT lines.
    - Quoting policy for OpenClaw:
      - Before posting each line, verify direction-specific liquidity (`intercomswap_ln_listchannels`) for that side.
+     - Pick a mode explicitly per strategy:
+       - `single_channel`: conservative, prevents accidental over-aggregation assumptions.
+       - `aggregate`: allows larger lines across multiple channels but remains best-effort at payment path time.
      - If liquidity is insufficient, do not post that line; rebalance first or switch to the opposite side.
      - Treat rebalance/routing costs as part of spread; otherwise profitable trading degrades into churn.
    - Add/remove liquidity:
