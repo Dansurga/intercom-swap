@@ -1199,62 +1199,8 @@ function App() {
     return '';
   }, [preflight?.ln_info_error, preflight?.ln_listfunds_error, preflight?.ln_listpeers_error, preflight?.ln_docker_ps_error, lnFundingAddrErr]);
 
-  // Auto-hygiene:
-  // - If a swap invite expires OR the trade hits a terminal state (claimed/refunded/canceled),
-  //   and we're still joined to its swap:* channel, leave automatically.
-  // - Auto-dismiss expired/done invites so the inbox only contains actionable items.
-  const autoLeftSwapChRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    if (!health?.ok) return;
-    if (!joinedChannels || joinedChannels.length === 0) return;
-    const joinedSet = new Set<string>(joinedChannels);
-    for (const ch of watchedChannelsSet) {
-      if (String(ch || '').startsWith('swap:')) joinedSet.add(ch);
-    }
-    const now = uiNowMs;
-
-    const candidates: Array<{ swapCh: string; tradeId: string; expiresAtMs: number }> = [];
-    for (const e of scEvents) {
-      try {
-        if (String((e as any)?.kind || '') !== 'swap.swap_invite') continue;
-        const msg = (e as any)?.message;
-        const tradeId = String(msg?.trade_id || (e as any)?.trade_id || '').trim();
-        const swapCh = String(msg?.body?.swap_channel || '').trim();
-        if (!swapCh || !swapCh.startsWith('swap:')) continue;
-        if (!joinedSet.has(swapCh)) continue;
-        if (autoLeftSwapChRef.current.has(swapCh)) continue;
-        const done = Boolean(tradeId && terminalTradeIdsSet.has(tradeId));
-        const expiresAtMs = epochToMs(msg?.body?.invite?.payload?.expiresAt) || 0;
-        const expired = expiresAtMs && Number.isFinite(expiresAtMs) && expiresAtMs > 0 ? now > expiresAtMs : false;
-        if (!done && !expired) continue;
-        candidates.push({ swapCh, tradeId, expiresAtMs: expiresAtMs || now });
-      } catch (_e) {}
-    }
-    if (candidates.length === 0) return;
-    candidates.sort((a, b) => a.expiresAtMs - b.expiresAtMs);
-
-    let cancelled = false;
-    void (async () => {
-      for (const c of candidates.slice(0, 5)) {
-        if (cancelled) return;
-        autoLeftSwapChRef.current.add(c.swapCh);
-        try {
-          await runToolFinal('intercomswap_sc_leave', { channel: c.swapCh }, { auto_approve: true });
-          if (watchedChannelsSet.has(c.swapCh)) unwatchChannel(c.swapCh);
-          if (c.tradeId) dismissInviteTrade(c.tradeId);
-          pushToast('info', `Auto-left stale swap channel: ${c.swapCh}`, { ttlMs: 6_000 });
-          void refreshPreflight();
-        } catch (_err) {
-          // If leave fails (peer down), allow retry later.
-          autoLeftSwapChRef.current.delete(c.swapCh);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [health?.ok, joinedChannels, scEvents, uiNowMs, watchedChannelsSet, terminalTradeIdsSet]);
+  // Stale swap-channel auto-leave is handled by backend tradeauto worker.
+  // UI only auto-dismisses stale invites for a cleaner actionable inbox.
 
   // Auto-dismiss stale invites even if we aren't joined. This keeps the invites inbox actionable.
   const autoDismissTradeRef = useRef<Set<string>>(new Set());

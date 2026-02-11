@@ -1315,8 +1315,13 @@ export class ToolExecutor {
         'event_max_age_ms',
         'tool_timeout_ms',
         'sc_ensure_interval_ms',
+        'hygiene_interval_ms',
         'default_sol_refund_window_sec',
         'welcome_ttl_sec',
+        'terms_replay_cooldown_ms',
+        'terms_replay_max',
+        'swap_auto_leave_cooldown_ms',
+        'swap_auto_leave_max_attempts',
         'ln_liquidity_mode',
         'usdt_mint',
         'enable_quote_from_offers',
@@ -1347,8 +1352,13 @@ export class ToolExecutor {
       const eventMaxAgeMs = expectOptionalInt(args, toolName, 'event_max_age_ms', { min: 30_000, max: 60 * 60 * 1000 });
       const toolTimeoutMs = expectOptionalInt(args, toolName, 'tool_timeout_ms', { min: 250, max: 120_000 });
       const scEnsureIntervalMs = expectOptionalInt(args, toolName, 'sc_ensure_interval_ms', { min: 500, max: 60_000 });
+      const hygieneIntervalMs = expectOptionalInt(args, toolName, 'hygiene_interval_ms', { min: 1_000, max: 60_000 });
       const defaultRefundSec = expectOptionalInt(args, toolName, 'default_sol_refund_window_sec', { min: 3600, max: 7 * 24 * 3600 });
       const welcomeTtlSec = expectOptionalInt(args, toolName, 'welcome_ttl_sec', { min: 30, max: 7 * 24 * 3600 });
+      const termsReplayCooldownMs = expectOptionalInt(args, toolName, 'terms_replay_cooldown_ms', { min: 1_000, max: 120_000 });
+      const termsReplayMax = expectOptionalInt(args, toolName, 'terms_replay_max', { min: 1, max: 500 });
+      const swapAutoLeaveCooldownMs = expectOptionalInt(args, toolName, 'swap_auto_leave_cooldown_ms', { min: 1_000, max: 120_000 });
+      const swapAutoLeaveMaxAttempts = expectOptionalInt(args, toolName, 'swap_auto_leave_max_attempts', { min: 1, max: 50 });
       const lnLiquidityModeRaw = expectOptionalString(args, toolName, 'ln_liquidity_mode', { min: 1, max: 32 });
       const lnLiquidityMode = lnLiquidityModeRaw ? String(lnLiquidityModeRaw).trim().toLowerCase() : '';
       if (lnLiquidityMode && lnLiquidityMode !== 'aggregate' && lnLiquidityMode !== 'single_channel') {
@@ -1372,8 +1382,13 @@ export class ToolExecutor {
         ...(eventMaxAgeMs !== null ? { event_max_age_ms: eventMaxAgeMs } : {}),
         ...(toolTimeoutMs !== null ? { tool_timeout_ms: toolTimeoutMs } : {}),
         ...(scEnsureIntervalMs !== null ? { sc_ensure_interval_ms: scEnsureIntervalMs } : {}),
+        ...(hygieneIntervalMs !== null ? { hygiene_interval_ms: hygieneIntervalMs } : {}),
         ...(defaultRefundSec !== null ? { default_sol_refund_window_sec: defaultRefundSec } : {}),
         ...(welcomeTtlSec !== null ? { welcome_ttl_sec: welcomeTtlSec } : {}),
+        ...(termsReplayCooldownMs !== null ? { terms_replay_cooldown_ms: termsReplayCooldownMs } : {}),
+        ...(termsReplayMax !== null ? { terms_replay_max: termsReplayMax } : {}),
+        ...(swapAutoLeaveCooldownMs !== null ? { swap_auto_leave_cooldown_ms: swapAutoLeaveCooldownMs } : {}),
+        ...(swapAutoLeaveMaxAttempts !== null ? { swap_auto_leave_max_attempts: swapAutoLeaveMaxAttempts } : {}),
         ...(lnLiquidityMode ? { ln_liquidity_mode: lnLiquidityMode } : {}),
         ...(usdtMint ? { usdt_mint: usdtMint } : {}),
         ...(enableQuote !== undefined ? { enable_quote_from_offers: enableQuote } : {}),

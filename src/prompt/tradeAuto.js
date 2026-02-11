@@ -65,6 +65,13 @@ function isEventStale(evt, maxAgeMs) {
   return Date.now() - ts > maxAgeMs;
 }
 
+function epochToMs(value) {
+  if (value === null || value === undefined) return 0;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n > 1e12 ? Math.trunc(n) : Math.trunc(n * 1000);
+}
+
 function pruneSetByLimit(set, limit) {
   const max = Math.max(1, Math.trunc(Number(limit) || 1));
   while (set.size > max) {
@@ -177,6 +184,8 @@ export class TradeAutoManager {
     this._toolTimeoutMs = 25_000;
     this._scEnsureIntervalMs = 5_000;
     this._nextScEnsureAt = 0;
+    this._hygieneIntervalMs = 10_000;
+    this._nextHygieneAt = 0;
 
     this._autoQuotedRfqSig = new Set();
     this._autoAcceptedQuoteSig = new Set();
@@ -188,6 +197,8 @@ export class TradeAutoManager {
     this._stageRetryAfter = new Map();
     this._tradePreimage = new Map();
     this._notOwnerTraceAt = new Map(); // trade_id -> ts
+    this._termsReplayByTrade = new Map(); // trade_id -> { count, nextAtMs, lastTs }
+    this._swapAutoLeaveByTrade = new Map(); // trade_id -> { attempts, nextAtMs, lastTs }
 
     this._stats = {
       ticks: 0,
@@ -253,6 +264,8 @@ export class TradeAutoManager {
         stage_retry_after: this._stageRetryAfter.size,
         trade_preimage: this._tradePreimage.size,
         not_owner_trace_at: this._notOwnerTraceAt.size,
+        terms_replay_by_trade: this._termsReplayByTrade.size,
+        swap_auto_leave_by_trade: this._swapAutoLeaveByTrade.size,
         debug_events: this._debugEvents.length,
       },
       recent_events: this._debugEvents.slice(-Math.min(200, this._debugMax)),
@@ -311,12 +324,37 @@ export class TradeAutoManager {
       max: 60_000,
       fallback: 5_000,
     });
+    const hygieneIntervalMs = clampInt(toIntOrNull(opts.hygiene_interval_ms), {
+      min: 1_000,
+      max: 60_000,
+      fallback: 10_000,
+    });
     const defaultSolRefundWindowSec = clampInt(toIntOrNull(opts.default_sol_refund_window_sec), {
       min: 3600,
       max: 7 * 24 * 3600,
       fallback: 72 * 3600,
     });
     const welcomeTtlSec = clampInt(toIntOrNull(opts.welcome_ttl_sec), { min: 30, max: 7 * 24 * 3600, fallback: 3600 });
+    const termsReplayCooldownMs = clampInt(toIntOrNull(opts.terms_replay_cooldown_ms), {
+      min: 1_000,
+      max: 120_000,
+      fallback: 6_000,
+    });
+    const termsReplayMax = clampInt(toIntOrNull(opts.terms_replay_max), {
+      min: 1,
+      max: 500,
+      fallback: 40,
+    });
+    const swapAutoLeaveCooldownMs = clampInt(toIntOrNull(opts.swap_auto_leave_cooldown_ms), {
+      min: 1_000,
+      max: 120_000,
+      fallback: 10_000,
+    });
+    const swapAutoLeaveMaxAttempts = clampInt(toIntOrNull(opts.swap_auto_leave_max_attempts), {
+      min: 1,
+      max: 50,
+      fallback: 10,
+    });
 
     const lnLiquidityModeRaw = String(opts.ln_liquidity_mode || 'aggregate').trim().toLowerCase();
     const lnLiquidityMode = lnLiquidityModeRaw === 'single_channel' ? 'single_channel' : 'aggregate';
@@ -336,8 +374,13 @@ export class TradeAutoManager {
       debug_max_events: debugMax,
       tool_timeout_ms: toolTimeoutMs,
       sc_ensure_interval_ms: scEnsureIntervalMs,
+      hygiene_interval_ms: hygieneIntervalMs,
       default_sol_refund_window_sec: defaultSolRefundWindowSec,
       welcome_ttl_sec: welcomeTtlSec,
+      terms_replay_cooldown_ms: termsReplayCooldownMs,
+      terms_replay_max: termsReplayMax,
+      swap_auto_leave_cooldown_ms: swapAutoLeaveCooldownMs,
+      swap_auto_leave_max_attempts: swapAutoLeaveMaxAttempts,
       ln_liquidity_mode: lnLiquidityMode,
       usdt_mint: usdtMint || null,
       enable_quote_from_offers: opts.enable_quote_from_offers !== false,
@@ -362,6 +405,8 @@ export class TradeAutoManager {
     this._toolTimeoutMs = toolTimeoutMs;
     this._scEnsureIntervalMs = scEnsureIntervalMs;
     this._nextScEnsureAt = 0;
+    this._hygieneIntervalMs = hygieneIntervalMs;
+    this._nextHygieneAt = 0;
     this._autoQuotedRfqSig.clear();
     this._autoAcceptedQuoteSig.clear();
     this._autoAcceptedTradeLock.clear();
@@ -372,6 +417,8 @@ export class TradeAutoManager {
     this._stageRetryAfter.clear();
     this._tradePreimage.clear();
     this._notOwnerTraceAt.clear();
+    this._termsReplayByTrade.clear();
+    this._swapAutoLeaveByTrade.clear();
 
     this._stats = {
       ticks: 0,
@@ -386,6 +433,11 @@ export class TradeAutoManager {
       max_events: maxEvents,
       max_trades: maxTrades,
       ln_liquidity_mode: lnLiquidityMode,
+      hygiene_interval_ms: hygieneIntervalMs,
+      terms_replay_cooldown_ms: termsReplayCooldownMs,
+      terms_replay_max: termsReplayMax,
+      swap_auto_leave_cooldown_ms: swapAutoLeaveCooldownMs,
+      swap_auto_leave_max_attempts: swapAutoLeaveMaxAttempts,
     });
 
     await this._runToolWithTimeout(
@@ -425,6 +477,8 @@ export class TradeAutoManager {
     this._stageRetryAfter.clear();
     this._tradePreimage.clear();
     this._notOwnerTraceAt.clear();
+    this._termsReplayByTrade.clear();
+    this._swapAutoLeaveByTrade.clear();
     this._trace('tradeauto_stop', { reason: String(reason || 'stopped') });
     return { type: 'tradeauto_stopped', reason: String(reason || 'stopped'), ...this.status() };
   }
@@ -483,6 +537,8 @@ export class TradeAutoManager {
     if (!tradeId) return;
     this._autoAcceptedTradeLock.delete(tradeId);
     this._tradePreimage.delete(tradeId);
+    this._termsReplayByTrade.delete(tradeId);
+    this._swapAutoLeaveByTrade.delete(tradeId);
     const prefix = `${tradeId}:`;
     for (const key of Array.from(this._stageDone.keys())) {
       if (String(key).startsWith(prefix)) this._stageDone.delete(key);
@@ -540,6 +596,16 @@ export class TradeAutoManager {
       if (!Number.isFinite(ts) || now - Number(ts) > this._doneMaxAgeMs) this._notOwnerTraceAt.delete(tradeId);
     }
     pruneMapByLimit(this._notOwnerTraceAt, Math.max(this.opts?.max_trades || 120, this._preimageMax));
+    for (const [tradeId, state] of Array.from(this._termsReplayByTrade.entries())) {
+      const lastTs = Number(state?.lastTs || 0);
+      if (!tradeId || !Number.isFinite(lastTs) || now - lastTs > this._doneMaxAgeMs) this._termsReplayByTrade.delete(tradeId);
+    }
+    pruneMapByLimit(this._termsReplayByTrade, Math.max(this.opts?.max_trades || 120, this._preimageMax));
+    for (const [tradeId, state] of Array.from(this._swapAutoLeaveByTrade.entries())) {
+      const lastTs = Number(state?.lastTs || 0);
+      if (!tradeId || !Number.isFinite(lastTs) || now - lastTs > this._doneMaxAgeMs) this._swapAutoLeaveByTrade.delete(tradeId);
+    }
+    pruneMapByLimit(this._swapAutoLeaveByTrade, Math.max(this.opts?.max_trades || 120, this._preimageMax));
   }
 
   _appendEvents(events) {
@@ -596,16 +662,36 @@ export class TradeAutoManager {
       if (tradeId) {
         let neg = swapNegotiationByTrade.get(tradeId);
         if (!neg) {
-          neg = { trade_id: tradeId, rfq: null, quote: null, quote_accept: null, swap_invite: null, swap_channel: '' };
+          neg = {
+            trade_id: tradeId,
+            rfq: null,
+            quote: null,
+            quote_accept: null,
+            swap_invite: null,
+            swap_channel: '',
+            rfq_ts: 0,
+            quote_ts: 0,
+            quote_accept_ts: 0,
+            swap_invite_ts: 0,
+          };
           swapNegotiationByTrade.set(tradeId, neg);
         }
-        if (kind === 'swap.rfq' && !neg.rfq) neg.rfq = msg;
-        else if (kind === 'swap.quote' && !neg.quote) neg.quote = msg;
-        else if (kind === 'swap.quote_accept' && !neg.quote_accept) neg.quote_accept = msg;
+        const ts = eventTs(e);
+        if (kind === 'swap.rfq' && !neg.rfq) {
+          neg.rfq = msg;
+          if (ts > Number(neg.rfq_ts || 0)) neg.rfq_ts = ts;
+        } else if (kind === 'swap.quote' && !neg.quote) {
+          neg.quote = msg;
+          if (ts > Number(neg.quote_ts || 0)) neg.quote_ts = ts;
+        } else if (kind === 'swap.quote_accept' && !neg.quote_accept) {
+          neg.quote_accept = msg;
+          if (ts > Number(neg.quote_accept_ts || 0)) neg.quote_accept_ts = ts;
+        }
         else if (kind === 'swap.swap_invite') {
           if (!neg.swap_invite) neg.swap_invite = msg;
           const ch = String(msg?.body?.swap_channel || '').trim();
           if (ch) neg.swap_channel = ch;
+          if (ts > Number(neg.swap_invite_ts || 0)) neg.swap_invite_ts = ts;
         }
       }
 
@@ -649,6 +735,39 @@ export class TradeAutoManager {
       }
     }
 
+    // Synthesize provisional swap contexts from negotiation events so settlement can proceed
+    // even before the first swap:* message arrives (prevents invite/join stalls).
+    for (const [tradeId, neg] of swapNegotiationByTrade.entries()) {
+      if (!tradeId) continue;
+      const swapCh = String(neg?.swap_channel || '').trim();
+      if (!swapCh || !swapCh.startsWith('swap:')) continue;
+      let ctx = swapTradeContextsByTrade.get(tradeId);
+      if (!ctx) {
+        const lastTs = Math.max(
+          Number(neg?.swap_invite_ts || 0),
+          Number(neg?.quote_accept_ts || 0),
+          Number(neg?.quote_ts || 0),
+          Number(neg?.rfq_ts || 0)
+        );
+        ctx = {
+          trade_id: tradeId,
+          channel: swapCh,
+          last_ts: Number.isFinite(lastTs) ? lastTs : 0,
+          terms: null,
+          accept: null,
+          invoice: null,
+          escrow: null,
+          ln_paid: null,
+          claimed: null,
+          refunded: null,
+          canceled: null,
+        };
+        swapTradeContextsByTrade.set(tradeId, ctx);
+      } else if (!String(ctx.channel || '').trim()) {
+        ctx.channel = swapCh;
+      }
+    }
+
     const swapTradeContexts = Array.from(swapTradeContextsByTrade.values()).sort((a, b) => Number(b.last_ts || 0) - Number(a.last_ts || 0));
 
     return {
@@ -662,6 +781,79 @@ export class TradeAutoManager {
       swapTradeContexts,
       terminalTradeIds,
     };
+  }
+
+  async _autoLeaveStaleSwapChannels({ ctx, joinedChannels }) {
+    if (!ctx || !Array.isArray(joinedChannels) || joinedChannels.length < 1) return;
+    const joinedSet = new Set(joinedChannels.map((c) => String(c || '').trim()).filter(Boolean));
+    const now = Date.now();
+    const maxAttempts = Number(this.opts?.swap_auto_leave_max_attempts || 10);
+    const baseCooldownMs = Number(this.opts?.swap_auto_leave_cooldown_ms || 10_000);
+
+    const candidateByTrade = new Map();
+    for (const tradeCtx of Array.isArray(ctx.swapTradeContexts) ? ctx.swapTradeContexts : []) {
+      const tradeId = String(tradeCtx?.trade_id || '').trim();
+      const swapChannel = String(tradeCtx?.channel || '').trim();
+      if (!tradeId || !swapChannel || !swapChannel.startsWith('swap:')) continue;
+      candidateByTrade.set(tradeId, {
+        tradeId,
+        swapChannel,
+        done: Boolean(tradeCtx?.claimed || tradeCtx?.refunded || tradeCtx?.canceled || ctx.terminalTradeIds.has(tradeId)),
+        expiresAtMs: 0,
+      });
+    }
+    for (const [tradeId, neg] of ctx.swapNegotiationByTrade.entries()) {
+      const swapChannel = String(neg?.swap_channel || '').trim();
+      if (!tradeId || !swapChannel || !swapChannel.startsWith('swap:')) continue;
+      const row = candidateByTrade.get(tradeId) || { tradeId, swapChannel, done: false, expiresAtMs: 0 };
+      row.swapChannel = row.swapChannel || swapChannel;
+      row.done = row.done || ctx.terminalTradeIds.has(tradeId);
+      row.expiresAtMs = Math.max(Number(row.expiresAtMs || 0), epochToMs(neg?.swap_invite?.body?.invite?.payload?.expiresAt));
+      candidateByTrade.set(tradeId, row);
+    }
+
+    for (const [tradeId, row] of candidateByTrade.entries()) {
+      if (!tradeId) continue;
+      const swapChannel = String(row?.swapChannel || '').trim();
+      if (!swapChannel || !swapChannel.startsWith('swap:')) continue;
+      if (!joinedSet.has(swapChannel)) continue;
+
+      const expiresAtMs = Number(row?.expiresAtMs || 0);
+      const expired = expiresAtMs > 0 && now > expiresAtMs;
+      const done = Boolean(row?.done || ctx.terminalTradeIds.has(tradeId));
+      if (!expired && !done) continue;
+
+      const state = this._swapAutoLeaveByTrade.get(tradeId) || { attempts: 0, nextAtMs: 0, lastTs: 0 };
+      if (state.attempts >= maxAttempts) continue;
+      if (Number(state.nextAtMs || 0) > now) continue;
+
+      try {
+        await this._runToolWithTimeout(
+          { tool: 'intercomswap_sc_leave', args: { channel: swapChannel } },
+          { timeoutMs: Math.min(this._toolTimeoutMs, 10_000), label: 'tradeauto_sc_leave' }
+        );
+        this._swapAutoLeaveByTrade.delete(tradeId);
+        this._trace('swap_auto_leave_ok', {
+          trade_id: tradeId,
+          channel: swapChannel,
+          reason: done ? 'terminal' : 'expired',
+        });
+      } catch (err) {
+        const attempts = Number(state.attempts || 0) + 1;
+        const cooldownMs = Math.min(120_000, baseCooldownMs * Math.max(1, attempts));
+        this._swapAutoLeaveByTrade.set(tradeId, {
+          attempts,
+          nextAtMs: now + cooldownMs,
+          lastTs: now,
+        });
+        this._trace('swap_auto_leave_fail', {
+          trade_id: tradeId,
+          channel: swapChannel,
+          attempts,
+          error: err?.message || String(err),
+        });
+      }
+    }
   }
 
   async _tick() {
@@ -715,6 +907,21 @@ export class TradeAutoManager {
         if (ctx.terminalTradeIds.has(tid)) this._autoAcceptedTradeLock.delete(tid);
       }
       this._pruneCaches({ terminalTradeIds: ctx.terminalTradeIds });
+
+      if (Date.now() >= this._nextHygieneAt) {
+        try {
+          const scStats = await this._runToolWithTimeout(
+            { tool: 'intercomswap_sc_stats', args: {} },
+            { timeoutMs: Math.min(this._toolTimeoutMs, 8_000), label: 'tradeauto_sc_stats' }
+          );
+          const joinedChannels = Array.isArray(scStats?.channels) ? scStats.channels.map((c) => String(c || '').trim()).filter(Boolean) : [];
+          await this._autoLeaveStaleSwapChannels({ ctx, joinedChannels });
+        } catch (err) {
+          this._trace('swap_auto_leave_scan_fail', { error: err?.message || String(err) });
+        } finally {
+          this._nextHygieneAt = Date.now() + this._hygieneIntervalMs;
+        }
+      }
 
       let actionsLeft = 12;
 
@@ -925,6 +1132,10 @@ export class TradeAutoManager {
           const escrowEnv = isObject(tradeCtx?.escrow) ? tradeCtx.escrow : null;
           const lnPaidEnv = isObject(tradeCtx?.ln_paid) ? tradeCtx.ln_paid : null;
 
+          if (acceptEnv && this._termsReplayByTrade.has(tradeId)) {
+            this._termsReplayByTrade.delete(tradeId);
+          }
+
           const termsBody = isObject(termsEnv?.body) ? termsEnv.body : {};
           const termsLnPayerPeer = String(termsBody?.ln_payer_peer || '').trim().toLowerCase();
           const termsSolRecipient = String(termsBody?.sol_recipient || '').trim();
@@ -1028,6 +1239,53 @@ export class TradeAutoManager {
                 this._markStageRetry(stageKey, 10_000);
                 this._log(`[tradeauto] ${stageKey} failed: ${err?.message || String(err)}`);
               }
+            }
+            continue;
+          }
+
+          if (iAmMaker && termsEnv && !acceptEnv) {
+            const nowMs = Date.now();
+            const nowSec = Math.floor(nowMs / 1000);
+            const replayMax = Number(this.opts?.terms_replay_max || 40);
+            const replayCooldownMs = Number(this.opts?.terms_replay_cooldown_ms || 6000);
+            const termsValidUntil = toIntOrNull(termsBody?.terms_valid_until_unix);
+            const replay = this._termsReplayByTrade.get(tradeId) || { count: 0, nextAtMs: 0, lastTs: 0 };
+            if (termsValidUntil !== null && termsValidUntil > 0 && nowSec > termsValidUntil) {
+              this._termsReplayByTrade.delete(tradeId);
+              this._trace('terms_replay_stop_expired', { trade_id: tradeId, channel: swapChannel });
+              continue;
+            }
+            if (replay.count >= replayMax) continue;
+            if (Number(replay.nextAtMs || 0) > nowMs) continue;
+            try {
+              await this._runToolWithTimeout(
+                { tool: 'intercomswap_sc_send_json', args: { channel: swapChannel, json: termsEnv } },
+                { timeoutMs: Math.min(this._toolTimeoutMs, 10_000), label: 'tradeauto_terms_replay' }
+              );
+              const next = { count: Number(replay.count || 0) + 1, nextAtMs: nowMs + replayCooldownMs, lastTs: nowMs };
+              this._termsReplayByTrade.set(tradeId, next);
+              if (next.count <= 3 || next.count % 5 === 0) {
+                this._trace('terms_replay_ok', {
+                  trade_id: tradeId,
+                  channel: swapChannel,
+                  attempt: next.count,
+                });
+              }
+              actionsLeft -= 1;
+              this._stats.actions += 1;
+            } catch (err) {
+              const attempts = Number(replay.count || 0) + 1;
+              this._termsReplayByTrade.set(tradeId, {
+                count: attempts,
+                nextAtMs: nowMs + replayCooldownMs,
+                lastTs: nowMs,
+              });
+              this._trace('terms_replay_fail', {
+                trade_id: tradeId,
+                channel: swapChannel,
+                attempt: attempts,
+                error: err?.message || String(err),
+              });
             }
             continue;
           }
