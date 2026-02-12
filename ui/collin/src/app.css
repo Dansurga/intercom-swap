@@ -590,6 +590,48 @@
   overflow-wrap: anywhere;
   word-break: break-word;
 }
+.ln-liquidity-panel {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 8px;
+}
+.ln-liquidity-title {
+  font-size: 11px;
+  margin-bottom: 6px;
+  color: var(--muted);
+}
+.ln-liquidity-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+.ln-liquidity-card {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.16);
+  padding: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ln-liquidity-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.ln-liquidity-kv-label {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.ln-op-area {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px;
+}
 .rowitem-bot {
   display: flex;
   align-items: center;

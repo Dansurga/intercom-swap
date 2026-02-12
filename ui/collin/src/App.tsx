@@ -6700,7 +6700,7 @@ function App() {
                   Open channels to add liquidity. Reusing the same peer is valid and increases total routing capacity.
                 </div>
 
-                <div className="gridform" style={{ marginTop: 8 }}>
+                <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div className="field">
                     <div className="field-hd">
                       <span className="mono">Liquidity Guardrail</span>
@@ -6946,7 +6946,7 @@ function App() {
                   </button>
                 </div>
 
-                <div className="field" style={{ marginTop: 12 }}>
+                <div className="field ln-op-area" style={{ marginTop: 12 }}>
                   <div className="field-hd">
                     <span className="mono">Increase Inbound (Self-Pay)</span>
                     <span className={`chip ${lnRebalanceSupported ? 'hi' : 'warn'}`}>
@@ -7093,7 +7093,7 @@ function App() {
                   )}
                 </div>
 
-                <div className="field" style={{ marginTop: 12 }}>
+                <div className="field ln-op-area" style={{ marginTop: 12 }}>
                   <div className="field-hd">
                     <span className="mono">Splice Channel (In/Out)</span>
                     <span className={`chip ${lnSpliceBackendSupported ? 'hi' : 'warn'}`}>
@@ -7236,17 +7236,40 @@ function App() {
                   )}
                 </div>
 
-                <div className="muted small" style={{ marginTop: 8 }}>
-                  Channels total/active: <span className="mono">{lnChannelCount}</span>/<span className="mono">{lnActiveChannelCount}</span>
-                  {' · '}
-                  max send (single): <span className="mono">{typeof lnMaxOutboundSats === 'number' ? `${satsToBtcDisplay(lnMaxOutboundSats)} BTC (${lnMaxOutboundSats} sats)` : '—'}</span>
-                  {' · '}
-                  total send: <span className="mono">{typeof lnTotalOutboundSats === 'number' ? `${satsToBtcDisplay(lnTotalOutboundSats)} BTC (${lnTotalOutboundSats} sats)` : '—'}</span>
-                </div>
-                <div className="muted small">
-                  max receive (single): <span className="mono">{typeof lnMaxInboundSats === 'number' ? `${satsToBtcDisplay(lnMaxInboundSats)} BTC (${lnMaxInboundSats} sats)` : '—'}</span>
-                  {' · '}
-                  total receive: <span className="mono">{typeof lnTotalInboundSats === 'number' ? `${satsToBtcDisplay(lnTotalInboundSats)} BTC (${lnTotalInboundSats} sats)` : '—'}</span>
+                <div className="ln-liquidity-panel" style={{ marginTop: 10 }}>
+                  <div className="ln-liquidity-title mono">Liquidity Snapshot</div>
+                  <div className="ln-liquidity-grid">
+                    <div className="ln-liquidity-card">
+                      <div className="muted small">Channels</div>
+                      <div className="mono">
+                        <span className="ln-liquidity-kv-label">total:</span> {lnChannelCount}
+                        {' · '}
+                        <span className="ln-liquidity-kv-label">active:</span> {lnActiveChannelCount}
+                      </div>
+                    </div>
+                    <div className="ln-liquidity-card">
+                      <div className="muted small">Send Capacity</div>
+                      <div className="ln-liquidity-row">
+                        <span className="ln-liquidity-kv-label">max (single)</span>
+                        <span className="mono">{typeof lnMaxOutboundSats === 'number' ? `${satsToBtcDisplay(lnMaxOutboundSats)} BTC (${lnMaxOutboundSats} sats)` : '—'}</span>
+                      </div>
+                      <div className="ln-liquidity-row">
+                        <span className="ln-liquidity-kv-label">total</span>
+                        <span className="mono">{typeof lnTotalOutboundSats === 'number' ? `${satsToBtcDisplay(lnTotalOutboundSats)} BTC (${lnTotalOutboundSats} sats)` : '—'}</span>
+                      </div>
+                    </div>
+                    <div className="ln-liquidity-card">
+                      <div className="muted small">Receive Capacity</div>
+                      <div className="ln-liquidity-row">
+                        <span className="ln-liquidity-kv-label">max (single)</span>
+                        <span className="mono">{typeof lnMaxInboundSats === 'number' ? `${satsToBtcDisplay(lnMaxInboundSats)} BTC (${lnMaxInboundSats} sats)` : '—'}</span>
+                      </div>
+                      <div className="ln-liquidity-row">
+                        <span className="ln-liquidity-kv-label">total</span>
+                        <span className="mono">{typeof lnTotalInboundSats === 'number' ? `${satsToBtcDisplay(lnTotalInboundSats)} BTC (${lnTotalInboundSats} sats)` : '—'}</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 <div style={{ marginTop: 10 }}>

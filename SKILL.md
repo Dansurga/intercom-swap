@@ -203,6 +203,9 @@ This repo also provides long-running RFQ “agent bots” that sit in an RFQ cha
       1) open a **new public channel** with `push_sats > 0` (recommended deterministic bootstrap), or
       2) have a counterparty open a channel to this node, or
       3) rebalance by paying an invoice from this node to another controlled node.
+  - Channel count guidance for market-making:
+    - minimum: **2 active public channels** per trading node (basic circular routing resilience)
+    - recommended: **3+ active public channels** per trading node (better path diversity and fewer `NO_ROUTE` failures)
   - Deterministic funding flow (BTC -> channel liquidity):
     1) fund LN on-chain wallet (`intercomswap_ln_newaddr`, then confirm with `intercomswap_ln_listfunds`)
     2) connect peer (`intercomswap_ln_connect`)
@@ -508,6 +511,9 @@ A→Z operating flow:
      - if you are outbound-heavy (Sell BTC first), keep push low (`0-10%`).
      - always keep `push_sats < amount_sats`.
    - Verify channel state/capacity: `intercomswap_ln_listchannels`.
+   - Channel count baseline for trading reliability:
+     - minimum: 2 active public channels per side
+     - recommended for market-making: 3+ active public channels per side
    - Direction guardrail (must check before posting):
      - `Sell BTC` requires outbound/local liquidity.
      - `Sell USDT` requires inbound/remote liquidity.
