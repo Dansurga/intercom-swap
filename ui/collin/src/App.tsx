@@ -8107,6 +8107,27 @@ function satsToBtcDisplay(sats: number) {
   return atomicToDecimal(String(Math.trunc(sats)), 8);
 }
 
+function formatHumanNumber(value: number, { maxFractionDigits = 2 }: { maxFractionDigits?: number } = {}) {
+  if (!Number.isFinite(value)) return '';
+  try {
+    return value.toLocaleString('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: Math.max(0, Math.trunc(maxFractionDigits)),
+    });
+  } catch (_e) {
+    return String(value);
+  }
+}
+
+function shortMonoId(raw: any, { head = 12, tail = 8 }: { head?: number; tail?: number } = {}) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  const h = Math.max(1, Math.trunc(head));
+  const t = Math.max(1, Math.trunc(tail));
+  if (s.length <= h + t + 1) return s;
+  return `${s.slice(0, h)}…${s.slice(-t)}`;
+}
+
 function lamportsToSolDisplay(lamports: any) {
   const s = String(lamports ?? '').trim();
   if (!s || !/^[0-9]+$/.test(s)) return '';
@@ -9092,6 +9113,7 @@ function RfqRow({
 }) {
   const body = evt?.message?.body;
   const postedIso = typeof evt?.ts === 'number' ? msToUtcIso(evt.ts) : '';
+  const tradeId = String(evt?.trade_id || evt?.message?.trade_id || '').trim();
   const direction = typeof body?.direction === 'string' ? body.direction : '';
   const btcSats = typeof body?.btc_sats === 'number' ? body.btc_sats : null;
   const usdtAtomic = typeof body?.usdt_amount === 'string' ? body.usdt_amount : '';
@@ -9108,6 +9130,22 @@ function RfqRow({
   const btcUsd = btcSats !== null && oracleBtcUsd ? (btcSats / 1e8) * oracleBtcUsd : null;
   const usdtNum = usdtAtomic ? atomicToNumber(usdtAtomic, 6) : null;
   const usdtUsd = usdtNum !== null && oracleUsdtUsd ? usdtNum * oracleUsdtUsd : null;
+  const btcBtc = btcSats !== null ? btcSats / 1e8 : null;
+  const btcDisplay = btcBtc !== null ? formatHumanNumber(btcBtc, { maxFractionDigits: 8 }) : '?';
+  const usdtDisplay =
+    usdtNum !== null
+      ? formatHumanNumber(usdtNum, { maxFractionDigits: 6 })
+      : usdtAtomic
+        ? atomicToDecimal(usdtAtomic, 6)
+        : '?';
+  const pricePerBtc = btcBtc !== null && btcBtc > 0 && usdtNum !== null ? usdtNum / btcBtc : null;
+  const priceDisplay = pricePerBtc !== null ? formatHumanNumber(pricePerBtc, { maxFractionDigits: 2 }) : '?';
+  const feeCapsDisplay = `${typeof maxPlatform === 'number' ? `${maxPlatform} bps (${bpsToPctDisplay(maxPlatform)}%)` : '?'} platform, ${
+    typeof maxTrade === 'number' ? `${maxTrade} bps (${bpsToPctDisplay(maxTrade)}%)` : '?'
+  } trade, ${typeof maxTotal === 'number' ? `${maxTotal} bps (${bpsToPctDisplay(maxTotal)}%)` : '?'} total`;
+  const refundWindowDisplay = `${typeof minWin === 'number' ? `${secToHuman(minWin)} (${minWin}s)` : '?'} - ${
+    typeof maxWin === 'number' ? `${secToHuman(maxWin)} (${maxWin}s)` : '?'
+  }`;
   const directionHint =
     direction === 'BTC_LN->USDT_SOL'
       ? 'give BTC (Lightning), receive USDT (Solana)'
@@ -9117,38 +9155,51 @@ function RfqRow({
   return (
     <div className={`rowitem ${expired ? 'expired' : ''}`} role="button" onClick={onSelect}>
       <div className="rowitem-top">
-        {postedIso ? <span className="mono dim">{postedIso}</span> : null}
         <span className="mono chip">{evt.channel}</span>
         {badge ? <span className="mono chip hi">{badge}</span> : null}
         {expired ? <span className="mono chip warn">expired</span> : null}
-        <span className="mono dim">{evt.trade_id || evt?.message?.trade_id || ''}</span>
       </div>
       <div className="rowitem-mid">
-        <span className="mono">
-          dir: {direction || '?'}
-          {directionHint ? ` (${directionHint})` : ''}
-        </span>
-        <span className="mono">
-          BTC: {btcSats !== null ? `${satsToBtcDisplay(btcSats)} BTC (${btcSats} sats)` : '?'}
-          {btcUsd !== null ? ` ≈ ${fmtUsd(btcUsd)}` : ''}
-        </span>
-        <span className="mono">
-          USDT: {usdtAtomic ? `${atomicToDecimal(usdtAtomic, 6)} (${usdtAtomic})` : '?'}
-          {usdtUsd !== null ? ` ≈ ${fmtUsd(usdtUsd)}` : ''}
-        </span>
-        <span className="mono">
-          fee caps:{' '}
-          {typeof maxPlatform === 'number' ? `${maxPlatform} bps (${bpsToPctDisplay(maxPlatform)}%)` : '?'} platform,{' '}
-          {typeof maxTrade === 'number' ? `${maxTrade} bps (${bpsToPctDisplay(maxTrade)}%)` : '?'} trade,{' '}
-          {typeof maxTotal === 'number' ? `${maxTotal} bps (${bpsToPctDisplay(maxTotal)}%)` : '?'} total
-        </span>
-        <span className="mono">
-          sol window: {typeof minWin === 'number' ? `${secToHuman(minWin)} (${minWin}s)` : '?'}-
-          {typeof maxWin === 'number' ? `${secToHuman(maxWin)} (${maxWin}s)` : '?'}
-        </span>
-        <span className="mono">
-          expires: {validUntilIso || '?'}{typeof validUntil === 'number' ? ` (${validUntil})` : ''}
-        </span>
+        <div className="trade-activity">
+          <div className="trade-activity-headline">
+            Sell <span className="mono">{btcDisplay}</span> BTC for <span className="mono">{usdtDisplay}</span> USDT
+          </div>
+          <div className="trade-activity-price">
+            Price / BTC: <span className="mono">{priceDisplay}</span> USDT
+          </div>
+          <div className="trade-activity-details">
+            <span>
+              <span className="muted">Trade:</span> <span className="mono">{shortMonoId(tradeId) || '?'}</span>
+            </span>
+            <span>
+              <span className="muted">Direction:</span> <span className="mono">{direction || '?'}</span>
+              {directionHint ? ` (${directionHint})` : ''}
+            </span>
+            <span>
+              <span className="muted">Posted:</span> <span className="mono">{postedIso || '?'}</span>
+            </span>
+            <span>
+              <span className="muted">Expires:</span>{' '}
+              <span className="mono">{validUntilIso || '?'}{typeof validUntil === 'number' ? ` (${validUntil})` : ''}</span>
+            </span>
+            <span>
+              <span className="muted">Fee Caps:</span> <span className="mono">{feeCapsDisplay}</span>
+            </span>
+            <span>
+              <span className="muted">Refund Window:</span> <span className="mono">{refundWindowDisplay}</span>
+            </span>
+            {btcUsd !== null ? (
+              <span>
+                <span className="muted">BTC Value:</span> <span className="mono">{fmtUsd(btcUsd)}</span>
+              </span>
+            ) : null}
+            {usdtUsd !== null ? (
+              <span>
+                <span className="muted">USDT Value:</span> <span className="mono">{fmtUsd(usdtUsd)}</span>
+              </span>
+            ) : null}
+          </div>
+        </div>
       </div>
       <div className="rowitem-bot">
         {showQuote ? (
@@ -9186,6 +9237,7 @@ function OfferRow({
 }) {
   const body = evt?.message?.body;
   const postedIso = typeof evt?.ts === 'number' ? msToUtcIso(evt.ts) : '';
+  const tradeId = String(evt?.trade_id || evt?.message?.trade_id || '').trim();
   const name = typeof body?.name === 'string' ? body.name : '';
   const offers = Array.isArray(body?.offers) ? body.offers : [];
   const o = offers[0] && typeof offers[0] === 'object' ? offers[0] : {};
@@ -9208,6 +9260,22 @@ function OfferRow({
   const btcUsd = btcSats !== null && oracleBtcUsd ? (btcSats / 1e8) * oracleBtcUsd : null;
   const usdtNum = usdtAtomic ? atomicToNumber(usdtAtomic, 6) : null;
   const usdtUsd = usdtNum !== null && oracleUsdtUsd ? usdtNum * oracleUsdtUsd : null;
+  const btcBtc = btcSats !== null ? btcSats / 1e8 : null;
+  const btcDisplay = btcBtc !== null ? formatHumanNumber(btcBtc, { maxFractionDigits: 8 }) : '?';
+  const usdtDisplay =
+    usdtNum !== null
+      ? formatHumanNumber(usdtNum, { maxFractionDigits: 6 })
+      : usdtAtomic
+        ? atomicToDecimal(usdtAtomic, 6)
+        : '?';
+  const pricePerBtc = btcBtc !== null && btcBtc > 0 && usdtNum !== null ? usdtNum / btcBtc : null;
+  const priceDisplay = pricePerBtc !== null ? formatHumanNumber(pricePerBtc, { maxFractionDigits: 2 }) : '?';
+  const feeCapsDisplay = `${typeof maxPlatform === 'number' ? `${maxPlatform} bps (${bpsToPctDisplay(maxPlatform)}%)` : '?'} platform, ${
+    typeof maxTrade === 'number' ? `${maxTrade} bps (${bpsToPctDisplay(maxTrade)}%)` : '?'
+  } trade, ${typeof maxTotal === 'number' ? `${maxTotal} bps (${bpsToPctDisplay(maxTotal)}%)` : '?'} total`;
+  const refundWindowDisplay = `${typeof minWin === 'number' ? `${secToHuman(minWin)} (${minWin}s)` : '?'} - ${
+    typeof maxWin === 'number' ? `${secToHuman(maxWin)} (${maxWin}s)` : '?'
+  }`;
 
   const hint =
     have === 'USDT_SOL' && want === 'BTC_LN'
@@ -9219,42 +9287,60 @@ function OfferRow({
   return (
     <div className={`rowitem ${expired ? 'expired' : ''}`} role="button" onClick={onSelect}>
       <div className="rowitem-top">
-        {postedIso ? <span className="mono dim">{postedIso}</span> : null}
         <span className="mono chip">{evt.channel}</span>
         {badge ? <span className="mono chip hi">{badge}</span> : null}
         {expired ? <span className="mono chip warn">expired</span> : null}
-        {name ? <span className="mono dim">{name}</span> : null}
-        <span className="mono dim">{evt.trade_id || evt?.message?.trade_id || ''}</span>
       </div>
       <div className="rowitem-mid">
-        <span className="mono">
-          {hint ? `offer: ${hint}` : 'offer'}
-          {offers.length > 1 ? ` (${offers.length} offers)` : ''}
-        </span>
-        <span className="mono">
-          BTC: {btcSats !== null ? `${satsToBtcDisplay(btcSats)} BTC (${btcSats} sats)` : '?'}
-          {btcUsd !== null ? ` ≈ ${fmtUsd(btcUsd)}` : ''}
-        </span>
-        <span className="mono">
-          USDT: {usdtAtomic ? `${atomicToDecimal(usdtAtomic, 6)} (${usdtAtomic})` : '?'}
-          {usdtUsd !== null ? ` ≈ ${fmtUsd(usdtUsd)}` : ''}
-        </span>
-        <span className="mono">
-          fee caps:{' '}
-          {typeof maxPlatform === 'number' ? `${maxPlatform} bps (${bpsToPctDisplay(maxPlatform)}%)` : '?'} platform,{' '}
-          {typeof maxTrade === 'number' ? `${maxTrade} bps (${bpsToPctDisplay(maxTrade)}%)` : '?'} trade,{' '}
-          {typeof maxTotal === 'number' ? `${maxTotal} bps (${bpsToPctDisplay(maxTotal)}%)` : '?'} total
-        </span>
-        <span className="mono">
-          sol window: {typeof minWin === 'number' ? `${secToHuman(minWin)} (${minWin}s)` : '?'}-
-          {typeof maxWin === 'number' ? `${secToHuman(maxWin)} (${maxWin}s)` : '?'}
-        </span>
-        <span className="mono">
-          rfq_channels: {rfqChans.length > 0 ? rfqChans.join(', ') : '?'}
-        </span>
-        <span className="mono">
-          expires: {validUntilIso || '?'}{typeof validUntil === 'number' ? ` (${validUntil})` : ''}
-        </span>
+        <div className="trade-activity">
+          <div className="trade-activity-headline">
+            Sell <span className="mono">{usdtDisplay}</span> USDT for <span className="mono">{btcDisplay}</span> BTC
+          </div>
+          <div className="trade-activity-price">
+            Price / BTC: <span className="mono">{priceDisplay}</span> USDT
+          </div>
+          <div className="trade-activity-details">
+            <span>
+              <span className="muted">Trade:</span> <span className="mono">{shortMonoId(tradeId) || '?'}</span>
+            </span>
+            <span>
+              <span className="muted">Listing:</span> <span className="mono">{name || '?'}</span>
+            </span>
+            <span>
+              <span className="muted">Posted:</span> <span className="mono">{postedIso || '?'}</span>
+            </span>
+            <span>
+              <span className="muted">Expires:</span>{' '}
+              <span className="mono">{validUntilIso || '?'}{typeof validUntil === 'number' ? ` (${validUntil})` : ''}</span>
+            </span>
+            <span>
+              <span className="muted">Fee Caps:</span> <span className="mono">{feeCapsDisplay}</span>
+            </span>
+            <span>
+              <span className="muted">Refund Window:</span> <span className="mono">{refundWindowDisplay}</span>
+            </span>
+            <span>
+              <span className="muted">RFQ Channels:</span> <span className="mono">{rfqChans.length > 0 ? rfqChans.join(', ') : '?'}</span>
+            </span>
+            <span>
+              <span className="muted">Offer Shape:</span>{' '}
+              <span className="mono">
+                {hint || '?'}
+                {offers.length > 1 ? ` (+${offers.length - 1} more line${offers.length - 1 > 1 ? 's' : ''})` : ''}
+              </span>
+            </span>
+            {btcUsd !== null ? (
+              <span>
+                <span className="muted">BTC Value:</span> <span className="mono">{fmtUsd(btcUsd)}</span>
+              </span>
+            ) : null}
+            {usdtUsd !== null ? (
+              <span>
+                <span className="muted">USDT Value:</span> <span className="mono">{fmtUsd(usdtUsd)}</span>
+              </span>
+            ) : null}
+          </div>
+        </div>
       </div>
       <div className="rowitem-bot">
         {showRespond ? (

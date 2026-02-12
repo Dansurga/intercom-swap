@@ -560,6 +560,31 @@
   overflow-wrap: anywhere;
   word-break: break-word;
 }
+.trade-activity {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.trade-activity-headline {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--fg);
+}
+.trade-activity-price {
+  font-size: 11px;
+  color: var(--muted);
+}
+.trade-activity-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 4px 10px;
+}
+.trade-activity-details > * {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .rowitem-bot {
   display: flex;
   align-items: center;
