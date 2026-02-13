@@ -29,6 +29,7 @@ import { hashTermsEnvelope } from '../swap/terms.js';
 import { verifySwapPrePayOnchain } from '../swap/verify.js';
 import { AutopostManager } from './autopost.js';
 import { TradeAutoManager } from './tradeAuto.js';
+import { lnPeerProbe } from './lnPeerGuard.js';
 import { repairToolArguments } from './repair.js';
 import {
   createSignedWelcome,
@@ -5368,6 +5369,21 @@ export class ToolExecutor {
       const peer = expectString(args, toolName, 'peer', { min: 10, max: 200 });
       if (dryRun) return { type: 'dry_run', tool: toolName, peer };
       return lnConnect(this.ln, { peer });
+    }
+    if (toolName === 'intercomswap_ln_peer_probe') {
+      assertAllowedKeys(args, toolName, ['peer', 'tcp_timeout_ms', 'connect']);
+      requireApproval(toolName, autoApprove);
+      const peer = expectString(args, toolName, 'peer', { min: 10, max: 200 });
+      const tcpTimeoutMs = expectOptionalInt(args, toolName, 'tcp_timeout_ms', { min: 50, max: 10_000 }) ?? 800;
+      const connect = 'connect' in args ? expectBool(args, toolName, 'connect') : true;
+      if (dryRun) return { type: 'dry_run', tool: toolName, peer, tcp_timeout_ms: tcpTimeoutMs, connect };
+      return await lnPeerProbe({
+        peerUri: peer,
+        tcpTimeoutMs,
+        connect,
+        listPeers: async () => lnListPeers(this.ln),
+        connectPeer: async (p) => lnConnect(this.ln, { peer: p }),
+      });
     }
     if (toolName === 'intercomswap_ln_fundchannel') {
       assertAllowedKeys(args, toolName, ['node_id', 'peer', 'amount_sats', 'push_sats', 'sat_per_vbyte']);

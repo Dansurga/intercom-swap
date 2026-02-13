@@ -916,6 +916,16 @@ export const INTERCOMSWAP_TOOLS = [
     },
     required: ['peer'],
   }),
+  tool('intercomswap_ln_peer_probe', 'Probe a Lightning peer (TCP reachability + LN connect state). Optionally attempts reconnect.', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      peer: { type: 'string', minLength: 10, maxLength: 200, description: 'nodeid@host:port' },
+      tcp_timeout_ms: { type: 'integer', minimum: 50, maximum: 10_000, description: 'TCP probe timeout (default 800ms).' },
+      connect: { type: 'boolean', description: 'If true, attempt intercomswap_ln_connect when disconnected and tcp probe is ok (default true).' },
+    },
+    required: ['peer'],
+  }),
   tool('intercomswap_ln_fundchannel', 'Open a public Lightning channel to a peer.', {
     type: 'object',
     additionalProperties: false,

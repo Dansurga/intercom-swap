@@ -4949,14 +4949,12 @@ function App() {
   const lnConnectedPeerSuggestions = useMemo(() => lnPeerSuggestions.filter((p) => p.connected), [lnPeerSuggestions]);
   const lnPeerFailoverKeyRef = useRef<string>('');
   const lnPeerFailoverSeenRef = useRef<{ nodeId: string; wasConnected: boolean } | null>(null);
-  const lnDefaultPeerAutoConnectRef = useRef<string>('');
+  const lnDefaultPeerAutoConnectLastAttemptAtRef = useRef<number>(0);
+  const lnDefaultPeerWasConnectedRef = useRef<boolean>(false);
 
-  // Mainnet UX: automatically connect to the default peer (ACINQ) so operators don't end up with
-  // an isolated topology that causes NO_ROUTE. This only runs when:
-  // - env_kind=mainnet
-  // - stack is running + LN wallet is unlocked
-  // - peer URI is still the default (no override in Advanced)
-  // - we're not already connected to ACINQ
+  // Mainnet UX: automatically (re)connect to the default peer (ACINQ) so operators don't end up
+  // with an isolated topology that causes NO_ROUTE. This is best-effort and throttled to avoid
+  // spamming lncli under unstable networks.
   useEffect(() => {
     const kind = String(envInfo?.env_kind || '').trim().toLowerCase();
     if (kind !== 'mainnet') return;
@@ -4964,12 +4962,19 @@ function App() {
     if (lnWalletLocked) return;
     const peer = lnPeerInput.trim();
     if (!peer || peer !== ACINQ_PEER_URI) return;
-    if (lnConnectedPeerSuggestions.some((p) => p.id === ACINQ_NODE_ID)) return;
+    const connected = lnConnectedPeerSuggestions.some((p) => p.id === ACINQ_NODE_ID);
+    if (connected) {
+      lnDefaultPeerWasConnectedRef.current = true;
+      return;
+    }
     if (runBusy) return;
 
-    const key = `${kind}:${ACINQ_PEER_URI}:${stackAnyRunning ? '1' : '0'}`;
-    if (lnDefaultPeerAutoConnectRef.current === key) return;
-    lnDefaultPeerAutoConnectRef.current = key;
+    const now = Date.now();
+    const lastAttemptAt = Number(lnDefaultPeerAutoConnectLastAttemptAtRef.current || 0);
+    const wasConnected = Boolean(lnDefaultPeerWasConnectedRef.current);
+    const cooldownMs = wasConnected ? 5_000 : 30_000;
+    if (lastAttemptAt > 0 && now - lastAttemptAt < cooldownMs) return;
+    lnDefaultPeerAutoConnectLastAttemptAtRef.current = now;
 
     (async () => {
       try {
@@ -7258,16 +7263,31 @@ function App() {
                           <div className="row" style={{ marginTop: 6, flexWrap: 'wrap' }}>
                             <button
                               className="btn small"
-                              disabled={runBusy || lnWalletLocked}
+                              disabled={runBusy}
                               title={ACINQ_PEER_URI}
                               onClick={async () => {
                                 setLnPeerInput(ACINQ_PEER_URI);
-                                if (lnWalletLocked) {
-                                  pushToast('error', 'Lightning wallet locked. Unlock it first, then refresh BTC status.');
-                                  return;
-                                }
                                 try {
-                                  await runToolFinal('intercomswap_ln_connect', { peer: ACINQ_PEER_URI }, { auto_approve: true });
+                                  const out = await runToolFinal(
+                                    'intercomswap_ln_peer_probe',
+                                    { peer: ACINQ_PEER_URI, tcp_timeout_ms: 800, connect: !lnWalletLocked },
+                                    { auto_approve: true }
+                                  );
+                                  const cj = out?.content_json;
+                                  const tcpOk = Boolean((cj as any)?.tcp?.ok);
+                                  const rtt = Number((cj as any)?.tcp?.rtt_ms || 0);
+                                  const lnConnected = Boolean((cj as any)?.ln?.connected_after ?? (cj as any)?.ln?.connected);
+                                  const connectAttempted = Boolean((cj as any)?.ln?.connect_attempted);
+                                  const suffix = `${tcpOk ? 'tcp ok' : 'tcp fail'}${tcpOk && rtt > 0 ? ` (${Math.trunc(rtt)}ms)` : ''}; ${
+                                    lnConnected ? 'ln connected' : 'ln disconnected'
+                                  }${connectAttempted ? ' (reconnect attempted)' : ''}`;
+                                  if (lnWalletLocked) {
+                                    pushToast('info', `ACINQ probe (wallet locked, no reconnect): ${suffix}`, { ttlMs: 8000 });
+                                  } else if (tcpOk && lnConnected) {
+                                    pushToast('success', `ACINQ: ${suffix}`);
+                                  } else {
+                                    pushToast('error', `ACINQ: ${suffix}`);
+                                  }
                                   void refreshPreflight();
                                 } catch (e: any) {
                                   const msg = String(e?.message || e || '').trim();
@@ -10055,13 +10075,18 @@ function TradeRow({
         ? Number.parseInt(refundAfterRaw.trim(), 10)
         : null;
   const nowSec = Number.isFinite(nowUnixSec as any) ? Number(nowUnixSec) : Math.floor(Date.now() / 1000);
-  const refundReached = refundAfterUnix !== null && Number.isFinite(refundAfterUnix) && nowSec >= refundAfterUnix;
+  const refundHasWindow =
+    refundAfterUnix !== null && Number.isFinite(refundAfterUnix) && refundAfterUnix > 0;
+  const refundReached = refundHasWindow && nowSec >= refundAfterUnix;
 
   const canClaim = !terminal && stateLower === 'ln_paid' && Boolean(String(trade?.ln_preimage_hex || '').trim());
-  const canRefund = !terminal && stateLower === 'escrow' && refundReached;
+  // Visual emphasis should reflect the stage ("escrow -> refund path") even if the refund timelock
+  // hasn't been reached yet, so operators can spot refundable trades in clutter.
+  const refundRelevant = !terminal && stateLower === 'escrow' && refundHasWindow;
+  const canRefund = refundRelevant && refundReached;
   const refundTitle = canRefund
     ? 'Refund now'
-    : refundAfterUnix && Number.isFinite(refundAfterUnix)
+    : refundHasWindow
       ? `Refund available after ${unixSecToUtcIso(refundAfterUnix)}`
       : 'Not refundable yet';
 
@@ -10089,12 +10114,12 @@ function TradeRow({
           >
             Claim
           </button>
-	          <button
-	            className={`btn small ${canRefund ? 'primary' : ''}`}
-	            aria-disabled={!canRefund}
-	            title={refundTitle}
-	            onClick={(e) => { e.stopPropagation(); onRecoverRefund(); }}
-	          >
+		          <button
+		            className={`btn small ${refundRelevant ? 'primary' : ''}`}
+		            aria-disabled={!canRefund}
+		            title={refundTitle}
+		            onClick={(e) => { e.stopPropagation(); onRecoverRefund(); }}
+		          >
 	            Refund
 	          </button>
         </div>

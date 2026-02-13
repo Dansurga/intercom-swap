@@ -11,6 +11,7 @@ import { PromptRouter } from '../src/prompt/router.js';
 import { ToolExecutor } from '../src/prompt/executor.js';
 import { DEFAULT_PROMPT_SETUP_PATH, loadPromptSetupFromFile } from '../src/prompt/config.js';
 import { INTERCOMSWAP_TOOLS } from '../src/prompt/tools.js';
+import { ACINQ_PEER_URI, LnPeerGuard } from '../src/prompt/lnPeerGuard.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -379,6 +380,35 @@ async function main() {
     }, tradeAutoBootstrap.retryMs);
   }
 
+  // LN peer guard: keep the default mainnet hub (ACINQ) connected even if Collin is closed.
+  // This reduces "NO_ROUTE" incidents that are ultimately caused by isolated/disconnected LN topology.
+  const lnPeerGuardCfg = (() => {
+    const netRaw = String(setup?.ln?.network || '').trim().toLowerCase();
+    const isMainnet = netRaw === 'bitcoin' || netRaw === 'mainnet';
+    return {
+      enabled: Boolean(isMainnet),
+      peer: ACINQ_PEER_URI,
+      intervalMs: 15_000,
+      cooldownMs: 30_000,
+      tcpTimeoutMs: 800,
+    };
+  })();
+  const lnPeerGuard = lnPeerGuardCfg.enabled
+    ? new LnPeerGuard({
+        peerUri: lnPeerGuardCfg.peer,
+        listPeers: async () => executor.execute('intercomswap_ln_listpeers', {}, { autoApprove: false, dryRun: false }),
+        connectPeer: async (peer) => executor.execute('intercomswap_ln_connect', { peer }, { autoApprove: true, dryRun: false }),
+        intervalMs: lnPeerGuardCfg.intervalMs,
+        reconnectCooldownMs: lnPeerGuardCfg.cooldownMs,
+        tcpTimeoutMs: lnPeerGuardCfg.tcpTimeoutMs,
+        logger: (msg) => {
+          try {
+            process.stderr.write(`${String(msg || '').trim()}\n`);
+          } catch (_e) {}
+        },
+      })
+    : null;
+
   const handler = async (req, res) => {
     try {
       const method = req.method || 'GET';
@@ -592,17 +622,25 @@ async function main() {
             retry_ms: tradeAutoBootstrap.retryMs,
             max_attempts: tradeAutoBootstrap.maxAttempts,
           },
+          ln_peer_guard: {
+            enabled: lnPeerGuardCfg.enabled,
+            peer: lnPeerGuardCfg.peer,
+            interval_ms: lnPeerGuardCfg.intervalMs,
+            reconnect_cooldown_ms: lnPeerGuardCfg.cooldownMs,
+          },
         },
         null,
         2
       ) + '\n'
     );
     startTradeAutoBootstrapLoop();
+    if (lnPeerGuard) lnPeerGuard.start();
   });
 
   process.on('exit', () => {
     if (tradeAutoBootstrapTimer) clearInterval(tradeAutoBootstrapTimer);
     tradeAutoBootstrapTimer = null;
+    if (lnPeerGuard) lnPeerGuard.stop();
   });
 }
 

@@ -307,30 +307,30 @@ Notes:
 | `info` | Peer info (pubkey, joined channels, SC-Bridge status) | none |
 | `stats` | Peer runtime stats | none |
 | `price-get` | Price snapshot from the peer's price feature | none |
-| `watch` | Stream messages for debugging/observability | `--channels <a,b,c>`, `--kinds <k1,k2>`, `--trade-id <id>`, `--pretty 0|1`, `--raw 0|1` |
+| `watch` | Stream messages for debugging/observability | `--channels <a,b,c>`, `--kinds <k1,k2>`, `--trade-id <id>`, `--pretty 0/1`, `--raw 0/1` |
 
 ##### Sidechannel I/O
 
 | Command | What it does | Flags |
 |---|---|---|
-| `join` | Join a sidechannel | `--channel <name>`; optional: `--invite <b64|json|@file>`, `--welcome <b64|json|@file>` |
+| `join` | Join a sidechannel | `--channel <name>`; optional: `--invite <b64/json/@file>`, `--welcome <b64/json/@file>` |
 | `leave` | Leave a sidechannel | `--channel <name>` |
 | `open` | Request others to open a channel (via the entry channel) | `--channel <name> --via <entryChannel>`; optional: `--invite <...>`, `--welcome <...>` |
-| `send` | Send plaintext or JSON to a channel | `--channel <name>` and one of: `--text <msg>` or `--json <obj|@file>`; optional: `--invite <...>`, `--welcome <...>` |
+| `send` | Send plaintext or JSON to a channel | `--channel <name>` and one of: `--text <msg>` or `--json <obj/@file>`; optional: `--invite <...>`, `--welcome <...>` |
 
 ##### Service Presence (Directory Beacon)
 
 | Command | What it does | Flags |
 |---|---|---|
-| `svc-announce` | Broadcast a signed service announcement | Required: `--channels <a,b,c> --name <label>`; optional: `--pairs <p1,p2>`, `--rfq-channels <a,b,c>`, `--note <text>`, `--offers-json <json|@file>`, `--trade-id <id>`, `--ttl-sec <sec>`, `--join 0|1` |
-| `svc-announce-loop` | Periodically re-broadcast announcements (sidechannels have no history) | Required: `--channels <a,b,c> --config <json|@file>`; optional: `--interval-sec <sec>`, `--watch 0|1`, `--ttl-sec <sec>`, `--trade-id <id>`, `--join 0|1` |
+| `svc-announce` | Broadcast a signed service announcement | Required: `--channels <a,b,c> --name <label>`; optional: `--pairs <p1,p2>`, `--rfq-channels <a,b,c>`, `--note <text>`, `--offers-json <json/@file>`, `--trade-id <id>`, `--ttl-sec <sec>`, `--join 0/1` |
+| `svc-announce-loop` | Periodically re-broadcast announcements (sidechannels have no history) | Required: `--channels <a,b,c> --config <json/@file>`; optional: `--interval-sec <sec>`, `--watch 0/1`, `--ttl-sec <sec>`, `--trade-id <id>`, `--join 0/1` |
 
 ##### Welcome/Invite Helpers (Owner-Signed)
 
 | Command | What it does | Flags |
 |---|---|---|
 | `make-welcome` | Create a signed welcome payload | `--channel <name> --text <welcomeText>` |
-| `make-invite` | Create a signed invite payload | `--channel <name> --invitee-pubkey <hex32>`; optional: `--ttl-sec <sec>`, `--welcome <b64|json|@file>` |
+| `make-invite` | Create a signed invite payload | `--channel <name> --invitee-pubkey <hex32>`; optional: `--ttl-sec <sec>`, `--welcome <b64/json/@file>` |
 
 ##### Swap Message Helpers (Signed Envelopes)
 
@@ -338,18 +338,18 @@ Notes:
 |---|---|---|
 | `rfq` | Send RFQ to an RFQ channel | `--channel <rfqChannel> --trade-id <id> --btc-sats <n> --usdt-amount <atomicStr>`; optional: `--valid-until-unix <sec>` |
 | `quote` | Send quote | `--channel <rfqChannel> --trade-id <id> --rfq-id <id> --btc-sats <n> --usdt-amount <atomicStr> --valid-until-unix <sec>` |
-| `quote-from-rfq` | Build + send a quote from an RFQ envelope | `--channel <rfqChannel> --rfq-json <envelope|@file>`; optional: `--btc-sats <n>`, `--usdt-amount <atomicStr>`, `--valid-until-unix <sec>` |
-| `quote-accept` | Accept a quote | `--channel <rfqChannel> --quote-json <envelope|@file>` |
-| `swap-invite-from-accept` | Create and send a `swap:<trade_id>` invite after acceptance | `--channel <rfqChannel> --accept-json <envelope|@file>`; optional: `--swap-channel <name>`, `--welcome-text <text>`, `--ttl-sec <sec>` |
-| `join-from-swap-invite` | Join a swap channel using a swap-invite envelope | `--swap-invite-json <envelope|@file>` |
+| `quote-from-rfq` | Build + send a quote from an RFQ envelope | `--channel <rfqChannel> --rfq-json <envelope/@file>`; optional: `--btc-sats <n>`, `--usdt-amount <atomicStr>`, `--valid-until-unix <sec>` |
+| `quote-accept` | Accept a quote | `--channel <rfqChannel> --quote-json <envelope/@file>` |
+| `swap-invite-from-accept` | Create and send a `swap:<trade_id>` invite after acceptance | `--channel <rfqChannel> --accept-json <envelope/@file>`; optional: `--swap-channel <name>`, `--welcome-text <text>`, `--ttl-sec <sec>` |
+| `join-from-swap-invite` | Join a swap channel using a swap-invite envelope | `--swap-invite-json <envelope/@file>` |
 | `terms` | Send swap terms into `swap:<id>` | Required: `--channel <swapChannel> --trade-id <id> --btc-sats <n> --usdt-amount <atomicStr> --sol-mint <base58> --sol-recipient <base58> --sol-refund <base58> --sol-refund-after-unix <sec> --ln-receiver-peer <hex32> --ln-payer-peer <hex32> --platform-fee-bps <n> --trade-fee-bps <n> --trade-fee-collector <base58>`; optional: `--platform-fee-collector <base58>`, `--terms-valid-until-unix <sec>` |
-| `accept` | Accept swap terms | `--channel <swapChannel> --trade-id <id>` and one of: `--terms-hash <hex>` or `--terms-json <envelope|body|@file>` |
+| `accept` | Accept swap terms | `--channel <swapChannel> --trade-id <id>` and one of: `--terms-hash <hex>` or `--terms-json <envelope/body/@file>` |
 
 ##### Verification
 
 | Command | What it does | Flags |
 |---|---|---|
-| `verify-prepay` | Validate that terms, invoice, and escrow match; optionally validate escrow on-chain | Required: `--terms-json <envelope|body|@file> --invoice-json <envelope|body|@file> --escrow-json <envelope|body|@file>`; optional: `--now-unix <sec>`, `--solana-rpc-url <url[,url2,...]>`, `--solana-commitment <confirmed|finalized|processed>` |
+| `verify-prepay` | Validate that terms, invoice, and escrow match; optionally validate escrow on-chain | Required: `--terms-json <envelope/body/@file> --invoice-json <envelope/body/@file> --escrow-json <envelope/body/@file>`; optional: `--now-unix <sec>`, `--solana-rpc-url <url[,url2,...]>`, `--solana-commitment <confirmed/finalized/processed>` |
 
 ---
 
@@ -388,9 +388,9 @@ Prefer `rfqbotmgr` for tool-call operation: stop/restart individual bot instance
 | `--swap-channel-template <tmpl>` | Swap channel name template (default `swap:{trade_id}`) |
 | `--quote-valid-sec <n>` | Quote validity window (default `60`) |
 | `--invite-ttl-sec <n>` | Invite TTL (default `604800`) |
-| `--once 0|1` | Exit after one completed swap (default `0`) |
+| `--once 0/1` | Exit after one completed swap (default `0`) |
 | `--once-exit-delay-ms <n>` | Delay before exiting when `--once 1` (default `750`) |
-| `--debug 0|1` | Verbose logs (default `0`) |
+| `--debug 0/1` | Verbose logs (default `0`) |
 | `--receipts-db <path>` | Receipts DB path (recommended: `onchain/receipts/rfq-bots/<store>/<bot>.sqlite`) |
 
 ##### Pricing Policy
@@ -403,7 +403,7 @@ Prefer `rfqbotmgr` for tool-call operation: stop/restart individual bot instance
 
 | Flag | Meaning |
 |---|---|
-| `--run-swap 0|1` | Execute the full swap state machine (default `0`) |
+| `--run-swap 0/1` | Execute the full swap state machine (default `0`) |
 | `--swap-timeout-sec <n>` | Per-swap timeout (default `300`) |
 | `--swap-resend-ms <n>` | Proof resend interval (default `1200`) |
 | `--terms-valid-sec <n>` | Terms validity window (default `300`) |
@@ -427,11 +427,11 @@ Prefer `rfqbotmgr` for tool-call operation: stop/restart individual bot instance
 
 | Flag | Meaning |
 |---|---|
-| `--ln-impl <cln|lnd>` | Lightning implementation (default `cln`) |
-| `--ln-backend <docker|cli>` | Lightning backend (default `docker`) |
+| `--ln-impl <cln/lnd>` | Lightning implementation (default `cln`) |
+| `--ln-backend <docker/cli>` | Lightning backend (default `docker`) |
 | `--ln-compose-file <path>` | Docker compose file (default `dev/ln-regtest/docker-compose.yml`) |
 | `--ln-service <name>` | Docker service name (required when `--ln-backend docker`) |
-| `--ln-network <regtest|signet|mainnet|...>` | Lightning network (default `regtest`) |
+| `--ln-network <regtest/signet/mainnet/...>` | Lightning network (default `regtest`) |
 | `--ln-cli-bin <path>` | CLI binary override (for `--ln-backend cli`) |
 
 ##### LND CLI Backend Extras (Only if `--ln-impl lnd --ln-backend cli`)
@@ -457,12 +457,12 @@ Prefer `rfqbotmgr` for tool-call operation: stop/restart individual bot instance
 | `--timeout-sec <n>` | RFQ/quote negotiation timeout (default `30`) |
 | `--rfq-resend-ms <n>` | RFQ resend interval (default `1200`) |
 | `--accept-resend-ms <n>` | Quote accept resend interval (default `1200`) |
-| `--once 0|1` | Exit after one completed swap (default `0`) |
+| `--once 0/1` | Exit after one completed swap (default `0`) |
 | `--once-exit-delay-ms <n>` | Delay before exiting when `--once 1` (default `200`) |
-| `--debug 0|1` | Verbose logs (default `0`) |
+| `--debug 0/1` | Verbose logs (default `0`) |
 | `--receipts-db <path>` | Receipts DB path (recommended: `onchain/receipts/rfq-bots/<store>/<bot>.sqlite`) |
-| `--persist-preimage 0|1` | Persist `ln_preimage_hex` into receipts (default `1` when receipts enabled) |
-| `--stop-after-ln-pay 0|1` | Testing/recovery hook: stop after paying LN (default `0`) |
+| `--persist-preimage 0/1` | Persist `ln_preimage_hex` into receipts (default `1` when receipts enabled) |
+| `--stop-after-ln-pay 0/1` | Testing/recovery hook: stop after paying LN (default `0`) |
 
 ##### Pricing Policy
 
@@ -473,7 +473,7 @@ Prefer `rfqbotmgr` for tool-call operation: stop/restart individual bot instance
 
 | Flag | Meaning |
 |---|---|
-| `--run-swap 0|1` | Execute the full swap state machine (default `0`) |
+| `--run-swap 0/1` | Execute the full swap state machine (default `0`) |
 | `--swap-timeout-sec <n>` | Per-swap timeout (default `300`) |
 | `--swap-resend-ms <n>` | Proof resend interval (default `1200`) |
 | `--min-solana-refund-window-sec <n>` | Reject TERMS where `sol_refund_after_unix - now` is below this (default `3600` = 1h) |
@@ -498,11 +498,11 @@ Prefer `rfqbotmgr` for tool-call operation: stop/restart individual bot instance
 
 | Flag | Meaning |
 |---|---|
-| `--ln-impl <cln|lnd>` | Lightning implementation (default `cln`) |
-| `--ln-backend <docker|cli>` | Lightning backend (default `docker`) |
+| `--ln-impl <cln/lnd>` | Lightning implementation (default `cln`) |
+| `--ln-backend <docker/cli>` | Lightning backend (default `docker`) |
 | `--ln-compose-file <path>` | Docker compose file (default `dev/ln-regtest/docker-compose.yml`) |
 | `--ln-service <name>` | Docker service name (required when `--ln-backend docker`) |
-| `--ln-network <regtest|signet|mainnet|...>` | Lightning network (default `regtest`) |
+| `--ln-network <regtest/signet/mainnet/...>` | Lightning network (default `regtest`) |
 | `--ln-cli-bin <path>` | CLI binary override (for `--ln-backend cli`) |
 
 ##### LND CLI Backend Extras (Only if `--ln-impl lnd --ln-backend cli`)
@@ -544,23 +544,23 @@ Prefer `rfqbotmgr` for tool-call operation: stop/restart individual bot instance
 | Flag | Meaning |
 |---|---|
 | `--rpc-url <url[,url2,...]>` | RPC pool (default `http://127.0.0.1:8899`) |
-| `--commitment <processed|confirmed|finalized>` | Commitment (default `confirmed`) |
+| `--commitment <processed/confirmed/finalized>` | Commitment (default `confirmed`) |
 
 #### Commands
 
 | Command | What it does | Flags |
 |---|---|---|
-| `keygen` | Create a keypair | `--out <path>`; optional: `--seed-hex <hex32>`, `--force 0|1` |
+| `keygen` | Create a keypair | `--out <path>`; optional: `--seed-hex <hex32>`, `--force 0/1` |
 | `address` | Print pubkey | `--keypair <path>` |
 | `balance` | SOL balance | `--keypair <path>` |
 | `airdrop` | Devnet/testnet airdrop | `--keypair <path> --sol <n>` |
 | `transfer-sol` | Send SOL | `--keypair <path> --to <pubkey> --sol <n>` |
 | `mint-create` | Create a test mint | `--keypair <path> --decimals <n>`; optional: `--out <path>` |
 | `mint-info` | Inspect mint | `--mint <pubkey>` |
-| `token-ata` | Print or create ATA | `--keypair <path> --mint <pubkey>`; optional: `--owner <pubkey>`, `--create 0|1` |
+| `token-ata` | Print or create ATA | `--keypair <path> --mint <pubkey>`; optional: `--owner <pubkey>`, `--create 0/1` |
 | `token-balance` | SPL token balance | `--keypair <path> --mint <pubkey>`; optional: `--owner <pubkey>` |
-| `token-transfer` | Transfer SPL tokens | `--keypair <path> --mint <pubkey> --to <pubkey> --amount <u64>`; optional: `--create-ata 0|1` |
-| `mint-to` | Mint test tokens | `--keypair <path> --mint <pubkey> --to <pubkey> --amount <u64>`; optional: `--create-ata 0|1` |
+| `token-transfer` | Transfer SPL tokens | `--keypair <path> --mint <pubkey> --to <pubkey> --amount <u64>`; optional: `--create-ata 0/1` |
+| `mint-to` | Mint test tokens | `--keypair <path> --mint <pubkey> --to <pubkey> --amount <u64>`; optional: `--create-ata 0/1` |
 | `inventory` | Print balances across mints | `--keypair <path>`; optional: `--mints <csvPubkeys>` |
 
 ---
@@ -572,7 +572,7 @@ Prefer `rfqbotmgr` for tool-call operation: stop/restart individual bot instance
 | Flag | Meaning |
 |---|---|
 | `--solana-rpc-url <url[,url2,...]>` | RPC pool (default `http://127.0.0.1:8899`) |
-| `--commitment <processed|confirmed|finalized>` | Commitment (default `confirmed`) |
+| `--commitment <processed/confirmed/finalized>` | Commitment (default `confirmed`) |
 | `--program-id <base58>` | Override program id (default is the shared program id compiled into the client) |
 | `--solana-cu-limit <units>` | Optional compute unit limit |
 | `--solana-cu-price <microLamports>` | Optional priority fee |
@@ -583,15 +583,15 @@ Prefer `rfqbotmgr` for tool-call operation: stop/restart individual bot instance
 | Command | What it does | Flags |
 |---|---|---|
 | `config-get` | Read platform config | none |
-| `config-init` | Initialize platform fee config (fixed `10` bps / 0.1%) | optional: `--fee-collector <pubkey>`, `--simulate 0|1`, `--fee-bps 10` |
-| `config-set` | Update platform fee collector (fee stays fixed at `10` bps / 0.1%) | optional: `--fee-collector <pubkey>`, `--simulate 0|1`, `--fee-bps 10` |
+| `config-init` | Initialize platform fee config (fixed `10` bps / 0.1%) | optional: `--fee-collector <pubkey>`, `--simulate 0/1`, `--fee-bps 10` |
+| `config-set` | Update platform fee collector (fee stays fixed at `10` bps / 0.1%) | optional: `--fee-collector <pubkey>`, `--simulate 0/1`, `--fee-bps 10` |
 | `fees-balance` | Platform fee vault balance | `--mint <pubkey>` |
-| `fees-withdraw` | Withdraw platform fees | `--mint <pubkey>`; optional: `--amount <u64>`, `--create-ata 0|1`, `--simulate 0|1` |
+| `fees-withdraw` | Withdraw platform fees | `--mint <pubkey>`; optional: `--amount <u64>`, `--create-ata 0/1`, `--simulate 0/1` |
 | `trade-config-get` | Read trade fee config | `--fee-collector <pubkey>` |
-| `trade-config-init` | Initialize trade fee config (default `10` bps / 0.1% when omitted) | optional: `--fee-bps <n>`, `--fee-collector <pubkey>`, `--simulate 0|1` |
-| `trade-config-set` | Update trade fee config (default `10` bps / 0.1% when omitted) | optional: `--fee-bps <n>`, `--fee-collector <pubkey>`, `--simulate 0|1` |
+| `trade-config-init` | Initialize trade fee config (default `10` bps / 0.1% when omitted) | optional: `--fee-bps <n>`, `--fee-collector <pubkey>`, `--simulate 0/1` |
+| `trade-config-set` | Update trade fee config (default `10` bps / 0.1% when omitted) | optional: `--fee-bps <n>`, `--fee-collector <pubkey>`, `--simulate 0/1` |
 | `trade-fees-balance` | Trade fee vault balance | `--fee-collector <pubkey> --mint <pubkey>` |
-| `trade-fees-withdraw` | Withdraw trade fees (for the signer fee collector) | `--mint <pubkey>`; optional: `--amount <u64>`, `--create-ata 0|1`, `--simulate 0|1` |
+| `trade-fees-withdraw` | Withdraw trade fees (for the signer fee collector) | `--mint <pubkey>`; optional: `--amount <u64>`, `--create-ata 0/1`, `--simulate 0/1` |
 | `escrow-get` | Inspect escrow state | `--payment-hash <hex32>` |
 
 ---
@@ -604,7 +604,7 @@ Prefer `rfqbotmgr` for tool-call operation: stop/restart individual bot instance
 |---|---|---|
 | `id` | Print the program id used by the codebase | none |
 | `build` | Build the SBF program | none (requires Rust + Solana CLI toolchain) |
-| `deploy` | Deploy/upgrade the program | Required: `--rpc-url <url> --payer <keypair.json> --program-keypair <keypair.json>`; optional: `--upgrade-authority <keypair.json>`, `--so <path>`, `--dry-run 0|1` |
+| `deploy` | Deploy/upgrade the program | Required: `--rpc-url <url> --payer <keypair.json> --program-keypair <keypair.json>`; optional: `--upgrade-authority <keypair.json>`, `--so <path>`, `--dry-run 0/1` |
 | `keypair-pubkey` | Print a program pubkey from a keypair file | `--program-keypair <keypair.json>` |
 
 ---
@@ -615,9 +615,9 @@ Prefer `rfqbotmgr` for tool-call operation: stop/restart individual bot instance
 
 | Flag | Meaning |
 |---|---|
-| `--impl <cln|lnd>` | Implementation (default `cln`) |
-| `--backend <cli|docker>` | Backend (default `cli`) |
-| `--network <bitcoin|mainnet|testnet|regtest|signet>` | Network (default `regtest`) |
+| `--impl <cln/lnd>` | Implementation (default `cln`) |
+| `--backend <cli/docker>` | Backend (default `cli`) |
+| `--network <bitcoin/mainnet/testnet/regtest/signet>` | Network (default `regtest`) |
 | `--compose-file <path>` | Docker backend compose (default `dev/ln-regtest/docker-compose.yml`) |
 | `--service <name>` | Docker service name (required for docker backend) |
 | `--cli-bin <path>` | CLI binary override |
@@ -637,7 +637,7 @@ Prefer `rfqbotmgr` for tool-call operation: stop/restart individual bot instance
 | `balance` | Alias of listfunds wallet balance | none |
 | `connect` | Connect to a peer | `--peer <nodeid@host:port>` |
 | `fundchannel` | Open a channel | `--node-id <hex> --amount-sats <n>` |
-| `closechannel` | Close a channel (returns liquidity to on-chain wallet) | `--channel-id <id>`; optional: `--force 0|1`, `--sat-per-vbyte <n>` |
+| `closechannel` | Close a channel (returns liquidity to on-chain wallet) | `--channel-id <id>`; optional: `--force 0/1`, `--sat-per-vbyte <n>` |
 | `invoice` | Create invoice | `--msat <amountmsat> --label <label> --desc <text>`; optional: `--expiry <sec>` |
 | `decodepay` | Decode a BOLT11 invoice | `--bolt11 <invoice>` |
 | `pay` | Pay invoice | `--bolt11 <invoice>` |
@@ -654,7 +654,7 @@ This is only for running LND from a local directory under `onchain/` (not requir
 
 | Command | What it does | Synopsis |
 |---|---|---|
-| `init` | Generate `lnd.conf` under `onchain/` | `init --node <name> [--network <mainnet|testnet|signet|regtest>] [--lnd-dir <path>] [--alias <str>] [--p2p-port <n>] [--rpc-port <n>] [--rest-port <n>] [--bitcoin-node <neutrino|bitcoind>] [--neutrino-peers <host:port[,..]>] [--wallet-password-file <path>]` |
+| `init` | Generate `lnd.conf` under `onchain/` | `init --node <name> [--network <mainnet/testnet/signet/regtest>] [--lnd-dir <path>] [--alias <str>] [--p2p-port <n>] [--rpc-port <n>] [--rest-port <n>] [--bitcoin-node <neutrino/bitcoind>] [--neutrino-peers <host:port[,..]>] [--wallet-password-file <path>]` |
 | `start` | Start `lnd` | `start --node <name> [--network <...>] [--lnd-dir <path>] [--lnd-bin <path>]` |
 | `stop` | Stop `lnd` | `stop --node <name> [--network <...>] [--lnd-dir <path>] [--lncli-bin <path>]` |
 | `create-wallet` | Create wallet (interactive) | `create-wallet --node <name> [--network <...>] [--lnd-dir <path>] [--lncli-bin <path>]` |
@@ -684,39 +684,166 @@ Canonical sources (always up to date):
 - Validation + runtime behavior: `src/prompt/executor.js`
 - LLM system/tool policy: `src/prompt/system.js`
 
-Recently added/changed tools and guardrails:
-- `intercomswap_ln_listpeers`: lists connected LN peers (used by Collin to suggest `nodeid@host:port`).
-- `intercomswap_ln_fundchannel`: supports `node_id` or `peer` (`nodeid@host:port`); if omitted and exactly one peer is connected, it auto-selects that peer.
-- `intercomswap_ln_listchannels` + `intercomswap_ln_closechannel`: channel inventory + close flow for channel management.
-- `intercomswap_rfq_post` / `intercomswap_quote_accept`: support `ln_liquidity_mode` (`single_channel` or `aggregate`).
-- `intercomswap_offer_post` / `intercomswap_quote_post` / `intercomswap_quote_post_from_rfq`: enforce maker-side LN inbound liquidity before posting lines/quotes.
-- `intercomswap_quote_accept`: embeds a signed best-effort `ln_liquidity_hint` in the accept envelope.
-- `intercomswap_swap_invite_from_accept`: optional `quote_envelope` argument enables stricter quote/hash cross-check plus best-effort taker liquidity hint validation before inviting.
-- `intercomswap_swap_ln_invoice_create_and_post`: now rejects early when maker inbound liquidity cannot receive `btc_sats`.
-- `intercomswap_swap_ln_pay_and_post_verified`: includes payer-side unroutable precheck + destination consistency checks and emits actionable LN route diagnostics on pay failures.
-- `intercomswap_tradeauto_start` / `intercomswap_tradeauto_status` / `intercomswap_tradeauto_stop`: backend multi-trade automation worker (quote/accept/invite/join/settlement orchestration).
-  - quote source controls:
-    - `enable_quote_from_offers`: quote RFQs only when a local Offer line matches.
-    - `enable_quote_from_rfqs`: quote RFQs even without a local Offer match (dangerous; disabled by default in stack/promptd/collin).
-  - liquidity mode:
-    - `ln_liquidity_mode` supports `single_channel` and `aggregate` for automated accepts.
-  - trace defaults: worker trace is OFF by default; toggle explicitly with `intercomswap_tradeauto_trace_set`.
-  - reliability knobs: `tool_timeout_ms` (per-tool timeout inside worker), `sc_ensure_interval_ms` (periodic SC subscribe/reconnect keepalive).
-  - waiting-terms liveness knobs: `waiting_terms_*` options bound waiting-time, replay/ping cadence, and timeout leave behavior.
-  - LN pay failure determinism knobs:
-    - `ln_pay_fail_leave_attempts`: minimum repeated `ln_pay` failures before fail-leave can trigger.
-    - `ln_pay_fail_leave_min_wait_ms`: minimum elapsed time since first `ln_pay` failure before fail-leave can trigger.
-    - `ln_pay_retry_cooldown_ms`: retry cadence before fail-leave thresholds are reached.
-  - bounded stage retries:
-    - `stage_retry_max` (default `2`): max retries per settlement stage before tradeauto aborts (posts CANCEL when safe + leaves swap channel).
-  - ownership detection: worker resolves local peer identity from SC info shapes returned by runtime (`peer` and `info.peerPubkey` variants) to avoid false `not_owner` settlement skips.
-- `intercomswap_tradeauto_trace_set`: enable/disable backend trace emission at runtime without restarting the full stack.
-- `intercomswap_swap_status_post`: signed status/liveness envelope helper for swap channels.
-- `intercomswap_swap_cancel_post`: signed cancel helper (allowed only before escrow is created; used by tradeauto to stop retry storms).
-- `intercomswap_stack_start`: auto-starts backend trade automation (safe defaults; only quotes RFQs that match local offers) and reports worker status/errors.
-- `intercomswap_stack_stop`: now also stops backend trade automation.
-- Swap maker invoice path (`intercomswap_swap_ln_invoice_create_and_post`) now uses normal invoice routing behavior (no forced private-route-hint mode).
-- Autopost safety: jobs stop on insufficient-funds/liquidity errors (in addition to expiry/fill stops).
+Tool index (complete):
+
+Complete prompt-tool index (source of truth: `src/prompt/tools.js`, runtime behavior: `src/prompt/executor.js`).
+
+#### Core
+| Tool | Description |
+|---|---|
+| `intercomswap_app_info` | Get app binding info (app_tag, Solana program id, derived app_hash). |
+| `intercomswap_env_get` | Get local environment/config summary (LN network, Solana RPC, receipts DB path). Does not touch the network. |
+| `intercomswap_stack_start` | Start/bootstrap the local stack (peer + SC-Bridge, LN regtest channel on docker, Solana local validator, receipts DB). |
+| `intercomswap_stack_stop` | Stop the local stack (peer + Solana local validator + LN docker). Does not delete state. |
+
+#### SC-Bridge
+| Tool | Description |
+|---|---|
+| `intercomswap_sc_info` | Get peer info via SC-Bridge (safe fields only). |
+| `intercomswap_sc_stats` | Get SC-Bridge stats. |
+| `intercomswap_sc_price_get` | Get latest price snapshot from local price feature/oracle. |
+| `intercomswap_sc_subscribe` | Subscribe this prompt session to sidechannel message events for specific channels. |
+| `intercomswap_sc_wait_envelope` | Wait for the next signed swap envelope seen on subscribed sidechannels. Returns a handle to the full envelope. |
+| `intercomswap_sc_join` | Join a sidechannel (invite/welcome optional). |
+| `intercomswap_sc_join_many` | Join multiple sidechannels (public rendezvous style). |
+| `intercomswap_sc_leave` | Leave a sidechannel locally (channel hygiene). |
+| `intercomswap_sc_leave_many` | Leave multiple sidechannels locally (channel hygiene). |
+| `intercomswap_sc_open` | Request/open a sidechannel via an entry channel (invite/welcome optional). |
+| `intercomswap_sc_send_text` | Send a plain text message to a channel. |
+| `intercomswap_sc_send_json` | Send a JSON message to a channel (structured payload). |
+
+#### Peer Lifecycle
+| Tool | Description |
+|---|---|
+| `intercomswap_peer_status` | List local peer instances started via prompt tools (reads onchain/peers). |
+| `intercomswap_peer_start` | Start a local peer instance (detached pear run process). |
+| `intercomswap_peer_stop` | Stop a local peer instance (by instance name). |
+| `intercomswap_peer_restart` | Restart a local peer instance (stop then start using last config). |
+
+#### RFQ/Offer/Quote
+| Tool | Description |
+|---|---|
+| `intercomswap_offer_post` | Post a signed Offer announcement (swap.svc_announce) into rendezvous channels (advertise: have USDT, want BTC; prompts BTC sellers to post matching RFQs). |
+| `intercomswap_rfq_post` | Post a signed RFQ envelope into an RFQ rendezvous channel (BTC_LN->USDT_SOL: sell BTC for USDT). |
+| `intercomswap_quote_post` | Post a signed QUOTE envelope into an RFQ channel (references an RFQ id). Fees are read from on-chain config/trade-config (not negotiated). Provide either valid_until_unix or valid_for_sec. |
+| `intercomswap_quote_post_from_rfq` | Maker: post a signed QUOTE that matches an RFQ envelope (no manual rfq_id/btc_sats/usdt_amount required). Fees are read from on-chain config/trade-config (not negotiated). Provide either valid_until_unix or valid_for_sec. |
+| `intercomswap_quote_accept` | Post a signed QUOTE_ACCEPT envelope into the RFQ channel (accept a quote). |
+| `intercomswap_swap_invite_from_accept` | Maker: generate welcome+invite and post SWAP_INVITE into the RFQ channel, based on an accepted quote. |
+| `intercomswap_join_from_swap_invite` | Taker: join swap:<id> channel using SWAP_INVITE envelope. |
+
+#### Trade Automation
+| Tool | Description |
+|---|---|
+| `intercomswap_tradeauto_status` | Get backend trade-automation worker status and memory counters. |
+| `intercomswap_tradeauto_trace_set` | Enable/disable backend trade-automation trace emission (off by default). |
+| `intercomswap_tradeauto_start` | Start backend multi-trade automation worker for subscribed sidechannels. |
+| `intercomswap_tradeauto_stop` | Stop backend multi-trade automation worker. |
+
+#### RFQ Bots
+| Tool | Description |
+|---|---|
+| `intercomswap_rfqbot_status` | List local RFQ bot instances started via prompt tools (reads onchain/rfq-bots). |
+| `intercomswap_rfqbot_start_maker` | Start a maker RFQ bot instance (detached background process). |
+| `intercomswap_rfqbot_start_taker` | Start a taker RFQ bot instance (detached background process). |
+| `intercomswap_rfqbot_stop` | Stop an RFQ bot instance (by instance name). |
+| `intercomswap_rfqbot_restart` | Restart an RFQ bot instance (stop then start using last config). |
+
+#### Autopost
+| Tool | Description |
+|---|---|
+| `intercomswap_autopost_status` | List in-process autopost jobs started via tools (offer/rfq repost schedulers). |
+| `intercomswap_autopost_start` | Start a periodic repost scheduler for offer_post or rfq_post. |
+| `intercomswap_autopost_stop` | Stop an autopost job (by name). |
+
+#### Swap Messaging
+| Tool | Description |
+|---|---|
+| `intercomswap_terms_post` | Maker: post signed TERMS envelope inside swap:<id>. |
+| `intercomswap_terms_accept` | Taker: post signed ACCEPT inside swap:<id> referencing the terms hash. |
+| `intercomswap_swap_status_post` | Post signed STATUS envelope inside swap:<id> (informational; used for liveness handshakes). |
+| `intercomswap_swap_cancel_post` | Post signed CANCEL envelope inside swap:<id> (only allowed before escrow is created). |
+| `intercomswap_terms_accept_from_terms` | Taker: post signed ACCEPT inside swap:<id> from a TERMS envelope (computes terms hash). |
+
+#### Lightning Docker/Lifecycle
+| Tool | Description |
+|---|---|
+| `intercomswap_ln_docker_ps` | Docker-only: show docker compose service status for the configured LN compose stack. |
+| `intercomswap_ln_docker_up` | Docker-only: start LN docker services (defaults to bitcoind + configured LN service). |
+| `intercomswap_ln_docker_down` | Docker-only: stop the LN docker compose stack. |
+| `intercomswap_ln_regtest_init` | Docker-only (regtest): bootstrap a funded Lightning channel between the two nodes in the compose stack (mine, fund, connect, open channel). |
+| `intercomswap_ln_unlock` | LND-only: unlock the wallet (docker backend). Uses ln.wallet_password_file from prompt setup, or an inferred file under onchain/lnd/<network>/ (gitignored). |
+
+#### Lightning Operations
+| Tool | Description |
+|---|---|
+| `intercomswap_ln_info` | Get Lightning node info (impl/backend configured locally). |
+| `intercomswap_ln_newaddr` | Get a new on-chain BTC address from the LN node wallet. |
+| `intercomswap_ln_listpeers` | List connected Lightning peers (used to suggest peer URIs). |
+| `intercomswap_ln_listfunds` | Get on-chain + channel balances. |
+| `intercomswap_ln_listchannels` | List Lightning channels with peer/state/balance details (for channel management). |
+| `intercomswap_ln_closechannel` | Close a Lightning channel (cooperative by default) to return liquidity to on-chain BTC. |
+| `intercomswap_ln_withdraw` | Send on-chain BTC from the LN node wallet to a BTC address. |
+| `intercomswap_ln_connect` | Connect to a Lightning peer (nodeid@host:port). |
+| `intercomswap_ln_peer_probe` | Probe a Lightning peer (TCP reachability + LN connect state). Optionally attempts reconnect. |
+| `intercomswap_ln_fundchannel` | Open a public Lightning channel to a peer. |
+| `intercomswap_ln_splice` | Splice a Lightning channel in/out (CLN experimental splicing only). Use positive sats to add liquidity and negative sats to remove liquidity. |
+| `intercomswap_ln_invoice_create` | Create a standard BOLT11 invoice (no hodl invoices). |
+| `intercomswap_ln_decodepay` | Decode a BOLT11 invoice offline. |
+| `intercomswap_ln_pay` | Pay a BOLT11 invoice. |
+| `intercomswap_ln_rebalance_selfpay` | Best-effort inbound rebalance: create an invoice on this node and pay it from this same node. Works best with LND using allow_self_payment; routing outcome depends on available channels/routes. |
+| `intercomswap_ln_pay_status` | Query payment status by payment_hash. |
+| `intercomswap_ln_preimage_get` | Get a payment preimage by payment_hash (for recovery). |
+
+#### Swap Settlement Helpers
+| Tool | Description |
+|---|---|
+| `intercomswap_swap_ln_invoice_create_and_post` | Maker: create an LN invoice and post LN_INVOICE into swap:<id>. |
+| `intercomswap_swap_sol_escrow_init_and_post` | Maker: init Solana escrow and post SOL_ESCROW_CREATED into swap:<id>. Requires taker to post ln_route_precheck_ok (swap.status) after LN invoice is posted. Fees are read from on-chain config/trade-config (not negotiated). |
+| `intercomswap_swap_verify_pre_pay` | Taker: verify (terms + LN invoice + Sol escrow) and validate the escrow exists on-chain before paying. |
+| `intercomswap_swap_ln_route_precheck_from_terms_invoice` | Taker: decode invoice and run LN route/liquidity precheck from signed TERMS + LN_INVOICE before maker escrow is created. |
+| `intercomswap_swap_ln_pay_and_post` | Taker: pay the LN invoice and post LN_PAID into swap:<id>. |
+| `intercomswap_swap_ln_pay_and_post_from_invoice` | Taker: pay an LN invoice from an LN_INVOICE envelope and post LN_PAID into swap:<id> (no manual bolt11/payment_hash copying). |
+| `intercomswap_swap_ln_pay_and_post_verified` | Taker: verify (terms + invoice + escrow on-chain), then pay the LN invoice and post LN_PAID into swap:<id>. |
+| `intercomswap_swap_sol_claim_and_post` | Taker: claim Solana escrow and post SOL_CLAIMED into swap:<id>. |
+
+#### Solana Operations
+| Tool | Description |
+|---|---|
+| `intercomswap_sol_local_status` | Local-only: show whether a solana-test-validator RPC is listening on the configured localhost port (and whether it was started by this repo). |
+| `intercomswap_sol_local_start` | Local-only: start solana-test-validator with the escrow program loaded (writes ledger/logs under onchain/). |
+| `intercomswap_sol_local_stop` | Local-only: stop the managed solana-test-validator process. |
+| `intercomswap_sol_signer_pubkey` | Get the configured Solana signer pubkey for this promptd instance. |
+| `intercomswap_sol_keygen` | Generate a new Solana keypair JSON file under onchain/ (gitignored). |
+| `intercomswap_sol_keypair_pubkey` | Get the pubkey for a Solana keypair JSON file (path must be under onchain/). |
+| `intercomswap_sol_airdrop` | Request an airdrop (local validator/test only; mainnet will fail). |
+| `intercomswap_sol_transfer_sol` | Transfer SOL from the configured signer to a recipient pubkey. |
+| `intercomswap_sol_token_transfer` | Transfer an SPL token (ATA->ATA) from the signer to a recipient owner pubkey. |
+| `intercomswap_sol_mint_create` | Create a new SPL mint where the signer is mint+freeze authority (test/dev convenience). |
+| `intercomswap_sol_mint_to` | Mint SPL tokens from a signer-controlled mint to a recipient owner pubkey (test/dev convenience). |
+| `intercomswap_sol_balance` | Get SOL balance for a pubkey. |
+| `intercomswap_sol_token_balance` | Get SPL token balance for a (owner,mint) pair (ATA). |
+| `intercomswap_sol_escrow_get` | Fetch escrow state by payment_hash (and mint). |
+| `intercomswap_sol_escrow_init` | Initialize an escrow locked to LN payment_hash. Fees are read from on-chain config/trade-config (not negotiated). |
+| `intercomswap_sol_escrow_claim` | Claim escrow by submitting LN preimage (recipient signature required). |
+| `intercomswap_sol_escrow_refund` | Refund escrow after timeout (refund signature required). |
+| `intercomswap_sol_config_get` | Get program fee config (platform config PDA). |
+| `intercomswap_sol_config_set` | Set program fee config (admin authority required; platform fee is fixed at 10 bps). |
+| `intercomswap_sol_fees_withdraw` | Withdraw accrued platform fees from fee vault (admin authority required). |
+| `intercomswap_sol_trade_config_get` | Get trade fee config (per fee_collector). |
+| `intercomswap_sol_trade_config_set` | Init/set trade fee config (fee_collector authority required; defaults to 10 bps when omitted). |
+| `intercomswap_sol_trade_fees_withdraw` | Withdraw accrued trade fees for the configured fee_collector. |
+
+#### Receipts/Recovery
+| Tool | Description |
+|---|---|
+| `intercomswap_receipts_list` | List local trade receipts (sqlite). |
+| `intercomswap_receipts_show` | Show a local receipt by trade_id. |
+| `intercomswap_receipts_list_open_claims` | List trades that look claimable (state=ln_paid and preimage present). |
+| `intercomswap_receipts_list_open_refunds` | List trades that look refundable (state=escrow and refund_after <= now). Uses local receipt data only. |
+| `intercomswap_swaprecover_claim` | Recover: claim a stuck Solana escrow using local receipts + signer. |
+| `intercomswap_swaprecover_refund` | Recover: refund an expired Solana escrow using local receipts + signer. |
+
+Total tools documented: 102.
 
 When function signatures change:
 - Update this README command/tool references.
