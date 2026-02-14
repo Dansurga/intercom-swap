@@ -13,6 +13,17 @@ function coerceSafeInt(value) {
   return n;
 }
 
+function renameKey(obj, from, to) {
+  if (!isObject(obj)) return;
+  if (!(from in obj)) return;
+  if (to in obj) {
+    delete obj[from];
+    return;
+  }
+  obj[to] = obj[from];
+  delete obj[from];
+}
+
 function pow10BigInt(n) {
   let out = 1n;
   for (let i = 0; i < n; i += 1) out *= 10n;
@@ -141,9 +152,33 @@ export function repairToolArguments(toolName, args) {
     if (Array.isArray(out.offers)) {
       out.offers = out.offers.map((o) => {
         if (!isObject(o)) return o;
-        if (!('usdt_amount' in o)) return o;
         const next = { ...o };
-        next.usdt_amount = coerceUsdtAtomic(next.usdt_amount);
+
+        // Common field-name slips (keep conservative; only when the intended key is missing).
+        renameKey(next, 'max_trade_fee_b', 'max_trade_fee_bps');
+        renameKey(next, 'max_trade_fee_bp', 'max_trade_fee_bps');
+        renameKey(next, 'max_platform_fee_b', 'max_platform_fee_bps');
+        renameKey(next, 'max_platform_fee_bp', 'max_platform_fee_bps');
+        renameKey(next, 'max_total_fee_b', 'max_total_fee_bps');
+        renameKey(next, 'max_total_fee_bp', 'max_total_fee_bps');
+        renameKey(next, 'min_sol_refund_sec', 'min_sol_refund_window_sec');
+        renameKey(next, 'max_sol_refund_sec', 'max_sol_refund_window_sec');
+        renameKey(next, 'min_sol_refund_window', 'min_sol_refund_window_sec');
+        renameKey(next, 'max_sol_refund_window', 'max_sol_refund_window_sec');
+        if ('sol_refund_window_sec' in next && !('min_sol_refund_window_sec' in next) && !('max_sol_refund_window_sec' in next)) {
+          next.min_sol_refund_window_sec = next.sol_refund_window_sec;
+          next.max_sol_refund_window_sec = next.sol_refund_window_sec;
+          delete next.sol_refund_window_sec;
+        }
+
+        // Coerce common int-like fields if the model emits them as digit strings.
+        if ('max_platform_fee_bps' in next) next.max_platform_fee_bps = coerceSafeInt(next.max_platform_fee_bps);
+        if ('max_trade_fee_bps' in next) next.max_trade_fee_bps = coerceSafeInt(next.max_trade_fee_bps);
+        if ('max_total_fee_bps' in next) next.max_total_fee_bps = coerceSafeInt(next.max_total_fee_bps);
+        if ('min_sol_refund_window_sec' in next) next.min_sol_refund_window_sec = coerceSafeInt(next.min_sol_refund_window_sec);
+        if ('max_sol_refund_window_sec' in next) next.max_sol_refund_window_sec = coerceSafeInt(next.max_sol_refund_window_sec);
+
+        if ('usdt_amount' in next) next.usdt_amount = coerceUsdtAtomic(next.usdt_amount);
         return next;
       });
     }
