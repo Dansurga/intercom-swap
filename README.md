@@ -1,4 +1,5 @@
-![123](https://github.com/user-attachments/assets/3c9278bc-20d7-4779-99b7-915f68d6deb7)
+![123](https://github.com/user-attachments/assets/c94c7a9b-32f8-4f0a-8443-87e0b1e9d3f1)
+
 ## ⚙️ Installation
 
 ### 1. Clone repository
