@@ -27,6 +27,11 @@ Built for quick testing on Android via **Termux** — no Telegram bot, no heavy 
    pkg update -y && pkg upgrade -y
    pkg install nodejs git -y
 ```
+npm install
+
+node server.js
+
+
 ## 📍 TRAC ADDRESS
 trac12t7x66llrh5qg498aqndngnuu7lz203m33dqxs0hedpl9qcklwsshh30cq
 ---
