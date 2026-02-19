@@ -1,4 +1,6 @@
-![123](https://github.com/user-attachments/assets/c94c7a9b-32f8-4f0a-8443-87e0b1e9d3f1)
+
+![123](https://github.com/user-attachments/assets/ec312f10-8f4f-4ab6-8a40-deec4a271384)
+![1](https://github.com/user-attachments/assets/20cb504b-1403-43f0-b1c9-d1b6daf42685)
 
 ## ⚙️ Installation
 
