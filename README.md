@@ -1,5 +1,9 @@
 
 
+![Screenshot_20260220_043107](https://github.com/user-attachments/assets/daf63e0a-6dab-4e10-a588-aedda56a8c25)
+![Screenshot_20260220_043114](https://github.com/user-attachments/assets/27815b43-e51d-4d2b-83c2-cfaf4d889644)
+![Screenshot_20260220_043120](https://github.com/user-attachments/assets/84b533c3-f209-471a-b15b-eb6187c5fb15)
+
 ## Intercom Swap Simple (Termux Edition)
 
 A lightweight, real-time peer-to-peer swap simulator with beautiful UI — focused on TNK ↔ BTC style swaps.  
