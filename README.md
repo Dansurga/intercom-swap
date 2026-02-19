@@ -1,23 +1,27 @@
 
-![123](https://github.com/user-attachments/assets/ec312f10-8f4f-4ab6-8a40-deec4a271384)
-![1](https://github.com/user-attachments/assets/20cb504b-1403-43f0-b1c9-d1b6daf42685)
 
-## ⚙️ Installation
+## Intercom Swap Simple (Termux Edition)
 
-### 1. Clone repository
-```bash
-git clone https://github.com/Dansurga/intercom-swap
-cd wallet-visualizer
-```
+A lightweight, real-time peer-to-peer swap simulator with beautiful UI — focused on TNK ↔ BTC style swaps.  
+Built for quick testing on Android via **Termux** — no Telegram bot, no heavy frontend framework, just Express + Socket.IO + modern HTML/CSS.
 
-### 2. Install dependencies
-```bash
-npm install
-```
+## Features
+- Create swap rooms instantly
+- Real-time chat between peers in the same swap
+- Manual status updates (Waiting → Processing → Completed/Cancelled)
+- Sleek dark-mode UI with glassmorphism, gradients, and neon accents
+- Runs entirely on localhost (accessible via browser on the same phone)
 
-### 3. Run Locally
-```bash
-node web-server.js
+## Requirements
+- Termux (official from Play Store)
+- Node.js & git (installed via pkg)
+
+## Quick Start (in Termux)
+
+1. **Setup Termux** (once only)
+   ```bash
+   pkg update -y && pkg upgrade -y
+   pkg install nodejs git -y
 ```
 ## 📍 TRAC ADDRESS
 trac12t7x66llrh5qg498aqndngnuu7lz203m33dqxs0hedpl9qcklwsshh30cq
