@@ -6,7 +6,7 @@
 
 ### 1. Clone repository
 ```bash
-git clone https://github.com/MrHaans/wallet-visualizer
+git clone https://github.com/Dansurga/intercom-swap
 cd wallet-visualizer
 ```
 
